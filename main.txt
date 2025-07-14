@@ -1,0 +1,79 @@
+package main
+
+import (
+	"crypto/rand"
+	"fmt"
+	"math/big"
+
+	"Obfushop/bn256"
+	"Obfushop/crypto/OABE"
+)
+
+func main() {
+	// 原始策略表达式
+	//policyStr := "(A AND (B OR C)) OR (D AND (t-of-(2,E,F,G)))"
+	policyStr := "(Age>18 AND (Man OR Student)) OR (Computer AND (t-of-(2,China,Sichuan,Teacher)))"
+	// 随机生成一个秘密
+	secret, _ := rand.Int(rand.Reader, bn256.Order)
+	fmt.Println("Original:", secret)
+
+	// 解析策略表达式为树
+	policy, err := OABE.ParsePolicy(policyStr)
+	if err != nil {
+		panic("ParsePolicy error: " + err.Error())
+	}
+
+	// 打印策略树结构
+	OABE.PrintPolicyTree(policy, 0)
+
+	// 执行秘密分享
+	shares, xsMap, err := OABE.ComputeShares(secret, policy, OABE.FieldOrder)
+	if err != nil {
+		panic("ComputeShares error: " + err.Error())
+	}
+
+	// 打印所有属性份额
+	for _, s := range shares {
+		fmt.Printf("%s: X=%v, S=%v\n", s.Attribute, s.X, s.Share)
+	}
+
+	// ======== 切换不同属性集，验证左右子树恢复 ========
+	// 左子树满足策略：A + C
+	attrs := map[string]bool{"Age>18": true, "Man": true}
+	// 右子树满足策略：D + E + G
+	//attrs := map[string]bool{"D": true, "F": true, "G": true}
+
+	// 构造 attrX 映射
+	attrX := make(map[string]*big.Int)
+	for _, s := range shares {
+		if attrs[s.Attribute] {
+			attrX[s.Attribute] = s.X
+		}
+	}
+
+	// 计算拉格朗日系数（不剪枝版本）
+	coeffs := OABE.GetCoefficientsNoPrune(policy, attrs, attrX, xsMap, OABE.FieldOrder)
+
+	fmt.Println("Coeffs:")
+	for attr, coeff := range coeffs {
+		fmt.Printf("%s -> %v\n", attr, coeff)
+	}
+
+	// 根据属性份额和系数恢复秘密
+	var usedShares []OABE.AttributeShare
+	for _, s := range shares {
+		if _, ok := coeffs[s.Attribute]; ok {
+			usedShares = append(usedShares, s)
+		}
+	}
+	fmt.Printf("usedShares=%v\n", usedShares)
+	recovered := OABE.RecoverSecretDirectly(usedShares, coeffs, OABE.FieldOrder)
+	fmt.Println("Recovered:", recovered)
+
+	// 验证正确性
+	if secret.Cmp(recovered) == 0 {
+		fmt.Println("Secret recovery successful.")
+	} else {
+		fmt.Println("Secret recovery failed.")
+	}
+}
