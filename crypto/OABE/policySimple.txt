@@ -1,0 +1,240 @@
+// package OABE
+
+// import (
+// 	"crypto/rand"
+// 	"errors"
+// 	"math/big"
+// )
+
+// var FieldOrder, _ = new(big.Int).SetString("21888242871839275222246405745257275088548364400416034343698204186575808495617", 10)
+
+// // NodeType 定义
+// type NodeType int
+
+// const (
+// 	ATTR NodeType = iota
+// 	THRESHOLD
+// )
+
+// type PolicyNode struct {
+// 	Type      NodeType
+// 	Threshold int
+// 	Attribute string
+// 	Children  []*PolicyNode
+// }
+
+// type AttributeShare struct {
+// 	Attribute string
+// 	Share     *big.Int
+// 	X         *big.Int
+// }
+
+// // 评估多项式
+// func EvaluatePolynomial(coeffs []*big.Int, x, p *big.Int) *big.Int {
+// 	result := big.NewInt(0)
+// 	xPower := big.NewInt(1)
+// 	for _, coeff := range coeffs {
+// 		t := new(big.Int).Mul(coeff, xPower)
+// 		t.Mod(t, p)
+// 		result.Add(result, t)
+// 		result.Mod(result, p)
+// 		xPower.Mul(xPower, x)
+// 		xPower.Mod(xPower, p)
+// 	}
+// 	return result
+// }
+
+// // 生成份额，k 阈值，n 总份额数
+// func GenerateShares(secret *big.Int, k, n int, p *big.Int) ([]*big.Int, []*big.Int, error) {
+// 	if k > n {
+// 		return nil, nil, errors.New("k must <= n")
+// 	}
+// 	coeffs := make([]*big.Int, k)
+// 	coeffs[0] = new(big.Int).Set(secret)
+// 	for i := 1; i < k; i++ {
+// 		r, err := rand.Int(rand.Reader, p)
+// 		if err != nil {
+// 			return nil, nil, err
+// 		}
+// 		coeffs[i] = r
+// 	}
+
+// 	xs := make([]*big.Int, n)
+// 	ys := make([]*big.Int, n)
+// 	for i := 1; i <= n; i++ {
+// 		x := big.NewInt(int64(i))
+// 		y := EvaluatePolynomial(coeffs, x, p)
+// 		xs[i-1] = x
+// 		ys[i-1] = y
+// 	}
+// 	return xs, ys, nil
+// }
+
+// // 拉格朗日系数计算
+// func LagrangeCoefficients(xList []*big.Int, p *big.Int) map[string]*big.Int {
+// 	coeffs := make(map[string]*big.Int)
+// 	for i, xi := range xList {
+// 		num := big.NewInt(1)
+// 		den := big.NewInt(1)
+// 		for j, xj := range xList {
+// 			if i == j {
+// 				continue
+// 			}
+// 			num.Mul(num, new(big.Int).Neg(xj))
+// 			num.Mod(num, p)
+// 			diff := new(big.Int).Sub(xi, xj)
+// 			diff.Mod(diff, p)
+// 			den.Mul(den, diff)
+// 			den.Mod(den, p)
+// 		}
+// 		denInv := new(big.Int).ModInverse(den, p)
+// 		if denInv == nil {
+// 			panic("ModInverse returned nil")
+// 		}
+// 		c := new(big.Int).Mul(num, denInv)
+// 		c.Mod(c, p)
+// 		coeffs[xi.String()] = c
+// 	}
+// 	return coeffs
+// }
+
+// // 恢复秘密
+// func RecoverSecret(xs, ys []*big.Int, p *big.Int) *big.Int {
+// 	coeffs := LagrangeCoefficients(xs, p)
+// 	secret := big.NewInt(0)
+// 	for i, xi := range xs {
+// 		c := coeffs[xi.String()]
+// 		t := new(big.Int).Mul(c, ys[i])
+// 		secret.Add(secret, t)
+// 		secret.Mod(secret, p)
+// 	}
+// 	return secret
+// }
+
+// // 这里直接构造 t-of-(2, A, B)
+// func BuildSimplePolicy() *PolicyNode {
+// 	return &PolicyNode{
+// 		Type:      THRESHOLD,
+// 		Threshold: 2,
+// 		Children: []*PolicyNode{
+// 			{Type: ATTR, Attribute: "A"},
+// 			{Type: ATTR, Attribute: "B"},
+// 		},
+// 	}
+// }
+
+// // 递归生成份额
+// func ComputeShares(secret *big.Int, node *PolicyNode, p *big.Int) ([]AttributeShare, error) {
+// 	var result []AttributeShare
+// 	err := computeSharesHelper(secret, node, &result, p, big.NewInt(1))
+// 	return result, err
+// }
+
+// func computeSharesHelper(secret *big.Int, node *PolicyNode, result *[]AttributeShare, p *big.Int, x *big.Int) error {
+// 	if node.Type == ATTR {
+// 		*result = append(*result, AttributeShare{
+// 			Attribute: node.Attribute,
+// 			Share:     new(big.Int).Set(secret),
+// 			X:         new(big.Int).Set(x),
+// 		})
+// 		return nil
+// 	}
+
+// 	n := len(node.Children)
+// 	k := node.Threshold
+// 	xs, ys, err := GenerateShares(secret, k, n, p)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	for i := 0; i < n; i++ {
+// 		// 这里是关键修正，传递 xs[i] 而非 x*xs[i]
+// 		err := computeSharesHelper(ys[i], node.Children[i], result, p, xs[i])
+// 		if err != nil {
+// 			return err
+// 		}
+// 	}
+// 	return nil
+// }
+
+// // 计算恢复系数
+// func GetCoefficients(tree *PolicyNode, p *big.Int) map[string]*big.Int {
+// 	coeffs := make(map[string]*big.Int)
+// 	getCoefficientsHelper(tree, big.NewInt(1), coeffs, p)
+// 	return coeffs
+// }
+
+// func getCoefficientsHelper(tree *PolicyNode, coeff *big.Int, out map[string]*big.Int, p *big.Int) {
+// 	if tree.Type == ATTR {
+// 		out[tree.Attribute] = new(big.Int).Set(coeff)
+// 		return
+// 	}
+
+// 	n := len(tree.Children)
+// 	k := tree.Threshold
+// 	if k > n {
+// 		k = n
+// 	}
+
+// 	xs := make([]*big.Int, n)
+// 	for i := 0; i < n; i++ {
+// 		xs[i] = big.NewInt(int64(i + 1))
+// 	}
+
+// 	lag := LagrangeCoefficients(xs[:k], p)
+// 	for i := 0; i < k; i++ {
+// 		childCoeff := new(big.Int).Mul(coeff, lag[xs[i].String()])
+// 		childCoeff.Mod(childCoeff, p)
+// 		getCoefficientsHelper(tree.Children[i], childCoeff, out, p)
+// 	}
+// }
+
+
+// package main
+
+// import (
+// 	"Obfushop/crypto/OABE"
+// 	"crypto/rand"
+// 	"fmt"
+// 	"math/big"
+// )
+
+// func main() {
+// 	tree := OABE.BuildSimplePolicy()
+// 	fmt.Println("策略树结构:")
+// 	//OABE.PrintPolicyTree(tree, 0)
+
+// 	secret, _ := rand.Int(rand.Reader, OABE.FieldOrder)
+// 	fmt.Printf("原始秘密: %s\n", secret.String())
+
+// 	shares, err := OABE.ComputeShares(secret, tree, OABE.FieldOrder)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+
+// 	fmt.Println("属性份额:")
+// 	for _, s := range shares {
+// 		fmt.Printf("%s: Share=%s, X=%s\n", s.Attribute, s.Share.String(), s.X.String())
+// 	}
+
+// 	coeffs := OABE.GetCoefficients(tree, OABE.FieldOrder)
+
+// 	var xs, ys []*big.Int
+// 	for _, s := range shares {
+// 		if _, ok := coeffs[s.Attribute]; ok {
+// 			xs = append(xs, s.X)
+// 			ys = append(ys, s.Share) // 直接用份额，不要乘系数
+// 		}
+// 	}
+
+// 	rec := OABE.RecoverSecret(xs, ys, OABE.FieldOrder)
+
+// 	fmt.Printf("恢复秘密: %s\n", rec.String())
+// 	if secret.Cmp(rec) == 0 {
+// 		fmt.Println("恢复成功")
+// 	} else {
+// 		fmt.Println("恢复失败")
+// 	}
+// }
+
+
