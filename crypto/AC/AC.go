@@ -40,11 +40,15 @@ type Cred struct {
 }
 
 type Proof struct {
-	W   *bn256.G2 // commitment in G2
-	V   *bn256.G1 // randomization in G1
-	U   *bn256.G1 //
-	S   *bn256.G1 //
-	PiV *PiV      // PiV      interface{}  // optional zero-knowledge proof
+	Value *big.Int
+	C     *bn256.G1
+	C_    *bn256.G1
+	W     *bn256.G2 // commitment in G2
+	V     *bn256.G1 // randomization in G1
+	U     *bn256.G1 //
+	S     *bn256.G1 //
+	PiV   *PiV      // PiV      interface{}  // optional zero-knowledge proof
+	Pi_R  *Pi_r
 }
 
 func Setup() *Params {
@@ -138,29 +142,34 @@ func ObtainCred(blindSigs *BlindSignature, d *big.Int) *Cred {
 	}
 }
 
-func ProveCred(params *Params, sk *big.Int, issuerkey *IssuerKey, cred *Cred, m *big.Int) (*Proof, error) {
-
+func ProveCred(pk1 *bn256.G1, params *Params, sk *big.Int, issuerkey *IssuerKey, cred *Cred, m *big.Int) (*Proof, error) {
 	// 1. r', randomize sigma
 	_r, _ := rand.Int(rand.Reader, params.Order)
 	_u := new(bn256.G1).ScalarMult(cred.U, _r)
 	_s := new(bn256.G1).ScalarMult(cred.Sigma, _r)
-
+	c := new(bn256.G1).ScalarMult(pk1, _r)
 	// 2. compute Kappa = r·g2 + alpha + ∑ betaᵢ·mᵢ
 	r, _ := rand.Int(rand.Reader, params.Order)
+	_c := new(bn256.G1).ScalarMult(cred.U, r)
 	w := new(bn256.G2).Add(new(bn256.G2).ScalarBaseMult(r), new(bn256.G2).Add(issuerkey.PK1, new(bn256.G2).ScalarMult(issuerkey.PK2, m)))
 	w.ScalarMult(w, sk)
 	v := new(bn256.G1).ScalarMult(_u, r)
 
 	// 4. 构造 π_v 证明
 	piv, _ := MakePiV(params, sk, issuerkey, cred.U, _u, m, r, w, v)
-
+	// 5.构造 π_r' 证明
+	pi_r, _ := MakePi_r(params, _c, pk1, _r, v, c)
 	// 4. output theta
 	proof := &Proof{
-		W:   w,
-		V:   v,
-		U:   _u,
-		S:   _s,
-		PiV: piv,
+		Value: m,
+		C:     c,
+		C_:    _c,
+		W:     w,
+		V:     v,
+		U:     _u,
+		S:     _s,
+		PiV:   piv,
+		Pi_R:  pi_r,
 	}
 	return proof, nil
 }
@@ -168,31 +177,35 @@ func ProveCred(params *Params, sk *big.Int, issuerkey *IssuerKey, cred *Cred, m 
 func VerifyCred(params *Params, pk1 *bn256.G1, pk2 *bn256.G2, issuerkey *IssuerKey, proof *Proof) (bool, error) {
 
 	//  π_v 证明校验
-	result, err := VerifyPiV(params, pk2, proof.U, proof.W, proof.V, proof.PiV)
-	if err != nil {
-		log.Fatal("proof verification failed:", err)
-		if result == false {
-			return false, nil
-		}
+	result := VerifyPiV(pk2, proof.U, proof.W, proof.V, proof.PiV)
+	if result == false {
+		fmt.Printf("π_v验证失败!!!\n")
+		return false, nil
 	}
 	//fmt.Println("π_v valid:", result)
+
+	resultPi_r := VerifyPi_r(params, proof.C_, pk1, proof.V, proof.C, proof.Pi_R)
+	if resultPi_r == false {
+		fmt.Printf("π_r验证失败!!!\n")
+		return false, nil
+	}
 
 	// Check h != identity && pairing matches
 	if proof.U.String() == new(bn256.G1).ScalarBaseMult(big.NewInt(0)).String() {
 		return false, nil
 	}
 
-	left1 := bn256.Pair(pk1, issuerkey.PK1)
-	right1 := bn256.Pair(params.G1, proof.PiV.Base1)
-	if left1.String() != right1.String() {
-		return false, nil
-	}
+	// left1 := bn256.Pair(pk1, issuerkey.PK1)
+	// right1 := bn256.Pair(params.G1, proof.PiV.Base1)
+	// if left1.String() != right1.String() {
+	// 	return false, nil
+	// }
 
-	left2 := bn256.Pair(pk1, issuerkey.PK2)
-	right2 := bn256.Pair(params.G1, proof.PiV.Base2)
-	if left2.String() != right2.String() {
-		return false, nil
-	}
+	// left2 := bn256.Pair(pk1, issuerkey.PK2)
+	// right2 := bn256.Pair(params.G1, proof.PiV.Base2)
+	// if left2.String() != right2.String() {
+	// 	return false, nil
+	// }
 
 	left3 := bn256.Pair(proof.U, proof.W)
 	right3 := bn256.Pair(new(bn256.G1).Add(proof.S, proof.V), pk2)

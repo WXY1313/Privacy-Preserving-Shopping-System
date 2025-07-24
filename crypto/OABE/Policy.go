@@ -548,14 +548,14 @@ func RecoverSecretDirectly(shares []AttributeShare, coeffs map[string]*big.Int, 
 func RecoverSecret(shares []DecShare, coeffs map[string]*big.Int, p *big.Int) *bn256.GT {
 	secret := new(bn256.GT).ScalarBaseMult(big.NewInt(int64(0)))
 	for _, share := range shares {
-		coeff, ok := coeffs[share.Attribute]
-		if !ok {
-			continue
-		}
+		coeff, _ := coeffs[share.Attribute]
+		// if !ok {
+		// 	continue
+		// }
 		//t := new(big.Int).Mul(coeff, share.Share)
 		//t.Mod(t, p)
 		t := new(bn256.GT).ScalarMult(share.Share, coeff)
-		secret.Add(secret, t)
+		secret = new(bn256.GT).Add(secret, t)
 	}
 	return secret
 }

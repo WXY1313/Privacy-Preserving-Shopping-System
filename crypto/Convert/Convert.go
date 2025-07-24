@@ -11,7 +11,7 @@ import (
 	bn256 "Obfushop/bn256"
 )
 
-func G1ToG1Point(bn256Point *bn256.G1) contract.DACG1Point {
+func G1ToG1Point(bn256Point *bn256.G1) contract.BCSIDG1Point {
 	// Marshal the G1 point to get the X and Y coordinates as bytes
 	point := bn256Point.Marshal()
 
@@ -19,14 +19,14 @@ func G1ToG1Point(bn256Point *bn256.G1) contract.DACG1Point {
 	x := new(big.Int).SetBytes(point[:32])
 	y := new(big.Int).SetBytes(point[32:64])
 
-	g1Point := contract.DACG1Point{
+	g1Point := contract.BCSIDG1Point{
 		X: x,
 		Y: y,
 	}
 	return g1Point
 }
 
-func G1PointToG1(g1point contract.DACG1Point) *bn256.G1 {
+func G1PointToG1(g1point contract.BCSIDG1Point) *bn256.G1 {
 	// 将 x 和 y 转换为字节数组
 	xBytes := g1point.X.Bytes()
 	yBytes := g1point.Y.Bytes()
@@ -38,7 +38,7 @@ func G1PointToG1(g1point contract.DACG1Point) *bn256.G1 {
 	return g1
 }
 
-func G2ToG2Point(point *bn256.G2) contract.DACG2Point {
+func G2ToG2Point(point *bn256.G2) contract.BCSIDG2Point {
 	// Marshal the G1 point to get the X and Y coordinates as bytes
 	pointBytes := point.Marshal()
 	//fmt.Println(point.Marshal())
@@ -49,7 +49,7 @@ func G2ToG2Point(point *bn256.G2) contract.DACG2Point {
 	b1 := new(big.Int).SetBytes(pointBytes[64:96])
 	b2 := new(big.Int).SetBytes(pointBytes[96:128])
 
-	g2Point := contract.DACG2Point{
+	g2Point := contract.BCSIDG2Point{
 		X: [2]*big.Int{a1, a2},
 		Y: [2]*big.Int{b1, b2},
 	}
@@ -74,7 +74,7 @@ func FlattenG2Array(points [][]*bn256.G2) [][4]*big.Int {
 	return flat
 }
 
-func G2ToG2Point2(point *bn256.G2) contract.DACG2Point {
+func G2ToG2Point2(point *bn256.G2) contract.BCSIDG2Point {
 	// Marshal the G1 point to get the X and Y coordinates as bytes
 	pointBytes := point.Marshal()
 	//fmt.Println(point.Marshal())
@@ -85,14 +85,14 @@ func G2ToG2Point2(point *bn256.G2) contract.DACG2Point {
 	b1 := new(big.Int).SetBytes(pointBytes[64:96])
 	b2 := new(big.Int).SetBytes(pointBytes[96:128])
 
-	g2Point := contract.DACG2Point{
+	g2Point := contract.BCSIDG2Point{
 		X: [2]*big.Int{a2, a1},
 		Y: [2]*big.Int{b2, b1},
 	}
 	return g2Point
 }
 
-func G2PointToG2(g2point contract.DACG2Point) *bn256.G2 {
+func G2PointToG2(g2point contract.BCSIDG2Point) *bn256.G2 {
 	// 将 X 和 Y 中的每个元素转换为字节数组
 	x1Bytes := g2point.X[0].Bytes()
 	x2Bytes := g2point.X[1].Bytes()

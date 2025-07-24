@@ -2,173 +2,7 @@
 //pragma experimental ABIEncoderV2;
 pragma solidity ^0.8.0;
 
-contract DAC {
-
-    struct G1Point {
-        uint256 X;
-        uint256 Y;
-    }
-
-    struct G2Point {
-        uint256[2] X;
-        uint256[2] Y;
-    }
-
-    // 保存 h' (G1Point) -> nu (G1Point) 的映射
-    mapping(bytes32 => G1Point) internal hPrimeToNu;
-
-    // DAO 成员的 com 提交：coms[memberIndex][qIndex][tIndex] = G2Point
-    mapping(uint256 => mapping(uint256 => mapping(uint256 => G2Point))) private coms;
-
-    // 上传函数：一次性上传一个成员的全部 [q+1][t] G2Points
-    function uploadComs(
-        uint256 memberIndex,
-        uint256 qPlus1,
-        uint256 t,
-        uint256[4][] calldata flatPoints  // 每个点用 [X0, X1, Y0, Y1] 表示
-    ) external {
-        require(flatPoints.length == qPlus1 * t, "Invalid length");
-
-        uint256 counter = 0;
-        for (uint256 i = 0; i < qPlus1; i++) {
-            for (uint256 j = 0; j < t; j++) {
-                uint256[4] memory pt = flatPoints[counter++];
-                coms[memberIndex][i][j] = G2Point(
-                    [pt[0], pt[1]],
-                    [pt[2], pt[3]]
-                );
-            }
-        }
-    }
-
-    // 上传一个 (h', nu) 对
-    function uploadHPrimeNu(G1Point memory hPrime, G1Point memory nu) public {
-        bytes32 key = hashG1Point(hPrime);
-        hPrimeToNu[key] = nu;
-    }
-
-
-    // 查询某个 h' 是否存在，如果存在，返回对应的 nu
-    function queryNuByHPrime(G1Point memory hPrime) public view returns (bool found, G1Point memory nu) {
-        bytes32 key = hashG1Point(hPrime);
-        G1Point memory stored = hPrimeToNu[key];
-        if (stored.X == 0 && stored.Y == 0) {
-            return (false, G1Point(0, 0));
-        }
-        return (true, stored);
-    }
-
-    // 辅助：将 G1 点打包后 hash
-    function hashG1Point(G1Point memory p) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(p.X, p.Y));
-    }
-
-    // 内部函数：返回 a + b 的 G2Point 和
-    function _G2Add(
-        G2Point memory a,
-        G2Point memory b
-    ) internal view returns (G2Point memory) {
-        (uint256 x1, uint256 x0, uint256 y1, uint256 y0) = ECTwistAdd(
-            a.X[1], a.X[0],
-            a.Y[1], a.Y[0],
-            b.X[1], b.X[0],
-            b.Y[1], b.Y[0]
-        );
-
-        return G2Point([x0, x1], [y0, y1]);
-    }
-
-
-    // 公共测试接口：判断 a + b 是否等于 c
-    function testG2Add(
-        G2Point memory a,
-        G2Point memory b,
-        G2Point memory c
-    ) public view returns (bool) {
-        (uint256 x1, uint256 x0, uint256 y1, uint256 y0) = ECTwistAdd(
-            a.X[1], a.X[0],
-            a.Y[1], a.Y[0],
-            b.X[1], b.X[0],
-            b.Y[1], b.Y[0]
-        );
-
-        G2Point memory sum = G2Point([x0, x1], [y0, y1]);
-        return equals2(sum, c);
-    }
-
-    function aggregateAllComs(
-        uint256 n,
-        uint256 qPlus1,
-        uint256 t
-    ) external {
-        require(n > 0, "Invalid number of members");
-
-        for (uint256 q = 0; q < qPlus1; q++) {
-            for (uint256 j = 0; j < t; j++) {
-                // 初始化为第一个成员（索引 1）的点
-                G2Point memory result = coms[1][q][j];
-
-                // 从成员 2 到 n 累加
-                for (uint256 i = 2; i <= n; i++) {
-                    result = _G2Add(result, coms[i][q][j]);
-                }
-
-                // 存入成员索引 0
-                coms[0][q][j] = result;
-            }
-        }
-    }
-
-    function getComPoint(uint256 memberIndex, uint256 i, uint256 j) external view returns (G2Point memory) {
-        G2Point memory pt = coms[memberIndex][i][j];
-        return pt;
-    }
-
-    bool PKResult;
-    function verifySingleShare(
-        uint256 index,           // 成员索引 i
-        uint256 qIndex,          // 属性索引 q
-        uint256 t,               // 阈值 t（com 的长度）
-        G2Point memory share     // 成员的 AX 或 BY[j-1]
-    ) public {
-        require(t > 0, "threshold t must be > 0");
-
-        // 初始值：com[0]，即 user=0, q=qIndex, j=0
-        G2Point memory right = coms[0][qIndex][0];
-
-        uint256 x = index + 1;
-        uint256 power;
-
-        for (uint256 j = 1; j < t; j++) {
-            power = expMod(x, j, GEN_ORDER);
-
-            G2Point memory term = coms[0][qIndex][j];
-
-            (uint256 xy, uint256 xx, uint256 yy, uint256 yx) = ECTwistMul(
-                power,
-                term.X[1], term.X[0],
-                term.Y[1], term.Y[0]
-            );
-
-            term = G2Point([xx, xy], [yx, yy]);
-
-            (xy, xx, yy, yx) = ECTwistAdd(
-                right.X[1], right.X[0],
-                right.Y[1], right.Y[0],
-                term.X[1], term.X[0],
-                term.Y[1], term.Y[0]
-            );
-
-            right = G2Point([xx, xy], [yx, yy]);
-        }
-        PKResult = equals2(share, right);
-    }
-
-    function GetPKResult() public view returns (bool) {
-        return PKResult;
-    }
-
-
+contract BC_SID {
     // p = p(u) = 36u^4 + 36u^3 + 24u^2 + 6u + 1
     uint256 constant FIELD_ORDER = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47;
 
@@ -181,58 +15,12 @@ contract DAC {
     // a = (p+1) / 4
     uint256 constant CURVE_A = 0xc19139cb84c680a6e14116da060561765e05aa45a1c72a34f082305b61f3f52;
 
-    // (P+1) / 4
-    function A() pure internal returns (uint256) {
-        return CURVE_A;
+    struct G1Point {
+        uint256 X;
+        uint256 Y;
     }
 
-    function N() pure internal returns (uint256) {
-        return GEN_ORDER;
-    }
-
-    /// return the generator of G1
-    function P1() pure internal returns (G1Point memory) {
-        return G1Point(1, 2);
-    }
-    G1Point G1 = G1Point(1, 2);
-    G2Point G2 = G2Point(
-        [11559732032986387107991004021392285783925812861821192530917403151452391805634,
-        10857046999023057135944570762232829481370756359578518086990519993285655852781],
-        [4082367875863433681332203403145435568316851327593401208105741076214120093531,
-        8495653923123431417604973247489272438418190587263600148770280649306958101930]
-    );
-
-    function expMod(uint256 _base, uint256 _exponent, uint256 _modulus)
-    internal view returns (uint256 retval)
-    {
-        bool success;
-        uint256[1] memory output;
-        uint[6] memory input;
-        input[0] = 0x20;        // baseLen = new(big.Int).SetBytes(getData(input, 0, 32))
-        input[1] = 0x20;        // expLen  = new(big.Int).SetBytes(getData(input, 32, 32))
-        input[2] = 0x20;        // modLen  = new(big.Int).SetBytes(getData(input, 64, 32))
-        input[3] = _base;
-        input[4] = _exponent;
-        input[5] = _modulus;
-        assembly {
-            success := staticcall(sub(gas(), 2000), 5, input, 0xc0, output, 0x20)
-        // Use "invalid" to make gas estimation work
-        //switch success case 0 { invalid }
-        }
-        require(success);
-        return output[0];
-    }
-
-
-    /// return the generator of G2
-    function P2() pure internal returns (G2Point memory) {
-        return G2Point(
-            [11559732032986387107991004021392285783925812861821192530917403151452391805634,
-            10857046999023057135944570762232829481370756359578518086990519993285655852781],
-            [4082367875863433681332203403145435568316851327593401208105741076214120093531,
-            8495653923123431417604973247489272438418190587263600148770280649306958101930]
-        );
-    }
+    //G1相关运算
 
     /// return the sum of two points of G1
     function g1add(G1Point memory p1, G1Point memory p2) view internal returns (G1Point memory r) {
@@ -242,7 +30,7 @@ contract DAC {
         input[2] = p2.X;
         input[3] = p2.Y;
         bool success;
-        assembly {
+        assembly("memory-safe") {
             success := staticcall(sub(gas(), 2000), 6, input, 0xc0, r, 0x60)
         // Use "invalid" to make gas estimation work
         //switch success case 0 { invalid }
@@ -258,7 +46,7 @@ contract DAC {
         input[1] = p.Y;
         input[2] = s;
         bool success;
-        assembly {
+        assembly("memory-safe") {
             success := staticcall(sub(gas(), 2000), 7, input, 0x80, r, 0x60)
         // Use "invalid" to make gas estimation work
         //switch success case 0 { invalid }
@@ -274,77 +62,13 @@ contract DAC {
         return G1Point(p.X, q - (p.Y % q));
     }
 
-    /// return the result of computing the pairing check
-    /// e(p1[0], p2[0]) *  .... * e(p1[n], p2[n]) == 1
-    /// For example pairing([P1(), P1().negate()], [P2(), P2()]) should
-    /// return true.
-    function pairing(G1Point[] memory p1, G2Point[] memory p2) view internal returns (bool) {
-        require(p1.length == p2.length);
-        uint elements = p1.length;
-        uint inputSize = elements * 6;
-        uint[] memory input = new uint[](inputSize);
-        for (uint i = 0; i < elements; i++)
-        {
-            input[i * 6 + 0] = p1[i].X;
-            input[i * 6 + 1] = p1[i].Y;
-            input[i * 6 + 2] = p2[i].X[0];
-            input[i * 6 + 3] = p2[i].X[1];
-            input[i * 6 + 4] = p2[i].Y[0];
-            input[i * 6 + 5] = p2[i].Y[1];
-        }
-        uint[1] memory out;
-        bool success;
-        assembly {
-            success := staticcall(sub(gas()	, 2000), 8, add(input, 0x20), mul(inputSize, 0x20), out, 0x20)
-        // Use "invalid" to make gas estimation work
-        //switch success case 0 { invalid }
-        }
-        require(success);
-        return out[0] != 0;
+
+    struct G2Point {
+        uint256[2] X;
+        uint256[2] Y;
     }
 
-    /// Convenience method for a pairing check for two pairs.
-    function pairingProd2(G1Point memory a1, G2Point memory a2, G1Point memory b1, G2Point memory b2) view internal returns (bool) {
-        G1Point[] memory p1 = new G1Point[](2);
-        G2Point[] memory p2 = new G2Point[](2);
-        p1[0] = a1;
-        p1[1] = b1;
-        p2[0] = a2;
-        p2[1] = b2;
-        return pairing(p1, p2);
-    }
-
-
-    /// Convenience method for a pairing check for two pairs.
-//	function pairingProd2(G1Point memory a1, G2Point memory a2, G1Point memory b1, G2Point memory b2) view internal returns (bool) {
-//		G1Point[] memory p1 = new G1Point[](2);
-//		G2Point[] memory p2 = new G2Point[](2);
-//		p1[0] = a1;
-//		p1[1] = b1;
-//		p2[0] = a2;
-//		p2[1] = b2;
-//		return pairing(p1, p2);
-//	}
-
-    function pairingProd4(
-        G1Point memory a1, G2Point memory a2,
-        G1Point memory b1, G2Point memory b2,
-        G1Point memory c1, G2Point memory c2,
-        G1Point memory d1, G2Point memory d2
-    ) view internal returns (bool) {
-        G1Point[] memory p1 = new G1Point[](4);
-        G2Point[] memory p2 = new G2Point[](4);
-        p1[0] = a1;
-        p1[1] = b1;
-        p1[2] = c1;
-        p1[3] = d1;
-        p2[0] = a2;
-        p2[1] = b2;
-        p2[2] = c2;
-        p2[3] = d2;
-        return pairing(p1, p2);
-    }
-
+    //G2相关运算
     uint256 internal constant FIELD_MODULUS = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47;
     uint256 internal constant TWISTBX = 0x2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5;
     uint256 internal constant TWISTBY = 0x9713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2;
@@ -406,7 +130,6 @@ contract DAC {
                 pt1yx, pt1yy
             );
         }
-
         assert(_isOnCurve(
             pt1xx, pt1xy,
             pt1yx, pt1yy
@@ -431,7 +154,6 @@ contract DAC {
             pt3[PTZX], pt3[PTZY]
         );
     }
-
     /**
      * @notice Multiply a twist point by a scalar
      * @param s     Scalar to multiply by
@@ -463,21 +185,18 @@ contract DAC {
                 pt1yx, pt1yy
             ));
         }
-
         uint256[6] memory pt2 = _ECTwistMulJacobian(
             s,
             pt1xx, pt1xy,
             pt1yx, pt1yy,
             pt1zx, 0
         );
-
         return _fromJacobian(
             pt2[PTXX], pt2[PTXY],
             pt2[PTYX], pt2[PTYY],
             pt2[PTZX], pt2[PTZY]
         );
     }
-
     function ECTwistNeg(uint256 pt1xx, uint256 pt1xy, uint256 pt1yx, uint256 pt1yy) pure internal returns (uint256, uint256,uint256, uint256) {
         // The prime q in the base field F_q for G2
         uint q = 21888242871839275222246405745257275088696311157297823662689037894645226208583;
@@ -485,7 +204,6 @@ contract DAC {
             return (0, 0, 0, 0);
         return (pt1xx,pt1xy, q - (pt1yx % q), q - (pt1yy % q));
     }
-
     /**
      * @notice Get the field modulus
      * @return The field modulus
@@ -493,11 +211,9 @@ contract DAC {
     function GetFieldModulus() public pure returns (uint256) {
         return FIELD_MODULUS;
     }
-
     function submod2(uint256 a, uint256 b, uint256 n) internal pure returns (uint256) {
         return addmod(a, n - b, n);
     }
-
     function _FQ2Mul(
         uint256 xx, uint256 xy,
         uint256 yx, uint256 yy
@@ -507,7 +223,6 @@ contract DAC {
             addmod(mulmod(xx, yy, FIELD_MODULUS), mulmod(xy, yx, FIELD_MODULUS), FIELD_MODULUS)
         );
     }
-
     function _FQ2Muc(
         uint256 xx, uint256 xy,
         uint256 c
@@ -517,7 +232,6 @@ contract DAC {
             mulmod(xy, c, FIELD_MODULUS)
         );
     }
-
     function _FQ2Add(
         uint256 xx, uint256 xy,
         uint256 yx, uint256 yy
@@ -527,7 +241,6 @@ contract DAC {
             addmod(xy, yy, FIELD_MODULUS)
         );
     }
-
     function _FQ2Sub(
         uint256 xx, uint256 xy,
         uint256 yx, uint256 yy
@@ -537,7 +250,6 @@ contract DAC {
             submod2(xy, yy, FIELD_MODULUS)
         );
     }
-
     function _FQ2Div(
         uint256 xx, uint256 xy,
         uint256 yx, uint256 yy
@@ -545,7 +257,6 @@ contract DAC {
         (yx, yy) = _FQ2Inv(yx, yy);
         return _FQ2Mul(xx, xy, yx, yy);
     }
-
     function _FQ2Inv(uint256 x, uint256 y) internal view returns (uint256, uint256) {
         uint256 inv = _modInv(addmod(mulmod(y, y, FIELD_MODULUS), mulmod(x, x, FIELD_MODULUS), FIELD_MODULUS), FIELD_MODULUS);
         return (
@@ -553,7 +264,6 @@ contract DAC {
             FIELD_MODULUS - mulmod(y, inv, FIELD_MODULUS)
         );
     }
-
     function _isOnCurve(
         uint256 xx, uint256 xy,
         uint256 yx, uint256 yy
@@ -569,10 +279,9 @@ contract DAC {
         (yyx, yyy) = _FQ2Sub(yyx, yyy, TWISTBX, TWISTBY);
         return yyx == 0 && yyy == 0;
     }
-
     function _modInv(uint256 a, uint256 n) internal view returns (uint256 result) {
         bool success;
-        assembly {
+        assembly("memory-safe") {
             let freemem := mload(0x40)
             mstore(freemem, 0x20)
             mstore(add(freemem,0x20), 0x20)
@@ -586,7 +295,6 @@ contract DAC {
         }
         require(success);
     }
-
     function _fromJacobian(
         uint256 pt1xx, uint256 pt1xy,
         uint256 pt1yx, uint256 pt1yy,
@@ -601,7 +309,6 @@ contract DAC {
         (pt2xx, pt2xy) = _FQ2Mul(pt1xx, pt1xy, invzx, invzy);
         (pt2yx, pt2yy) = _FQ2Mul(pt1yx, pt1yy, invzx, invzy);
     }
-
     function _ECTwistAddJacobian(
         uint256 pt1xx, uint256 pt1xy,
         uint256 pt1yx, uint256 pt1yy,
@@ -632,7 +339,6 @@ contract DAC {
             );
             return pt3;
         }
-
         (pt2yx,     pt2yy)     = _FQ2Mul(pt2yx, pt2yy, pt1zx, pt1zy); // U1 = y2 * z1
         (pt3[PTYX], pt3[PTYY]) = _FQ2Mul(pt1yx, pt1yy, pt2zx, pt2zy); // U2 = y1 * z2
         (pt2xx,     pt2xy)     = _FQ2Mul(pt2xx, pt2xy, pt1zx, pt1zy); // V1 = x2 * z1
@@ -658,7 +364,6 @@ contract DAC {
             );
             return pt3;
         }
-
         (pt2zx,     pt2zy)     = _FQ2Mul(pt1zx, pt1zy, pt2zx,     pt2zy);     // W = z1 * z2
         (pt1xx,     pt1xy)     = _FQ2Sub(pt2yx, pt2yy, pt3[PTYX], pt3[PTYY]); // U = U1 - U2
         (pt1yx,     pt1yy)     = _FQ2Sub(pt2xx, pt2xy, pt3[PTZX], pt3[PTZY]); // V = V1 - V2
@@ -677,7 +382,6 @@ contract DAC {
         (pt1xx,     pt1xy)     = _FQ2Mul(pt1zx, pt1zy, pt3[PTYX], pt3[PTYY]); // V_cubed * U2
         (pt3[PTYX], pt3[PTYY]) = _FQ2Sub(pt1yx, pt1yy, pt1xx,     pt1xy);     // newy = U * (V_squared_times_V2 - A) - V_cubed * U2
     }
-
     function _ECTwistDoubleJacobian(
         uint256 pt1xx, uint256 pt1xy,
         uint256 pt1yx, uint256 pt1yy,
@@ -708,7 +412,6 @@ contract DAC {
         (pt2zx, pt2zy) = _FQ2Mul(pt1zx, pt1zy, pt2zx, pt2zy); // S * S_squared
         (pt2zx, pt2zy) = _FQ2Muc(pt2zx, pt2zy, 8);            // newz = 8 * S * S_squared
     }
-
     function _ECTwistMulJacobian(
         uint256 d,
         uint256 pt1xx, uint256 pt1xy,
@@ -738,22 +441,388 @@ contract DAC {
             d = d / 2;
         }
     }
+    // 内部函数：返回 a + b
+    function g2Add(
+        G2Point memory a,
+        G2Point memory b
+    ) internal view returns (G2Point memory) {
+        (uint256 x1, uint256 x0, uint256 y1, uint256 y0) = ECTwistAdd(
+            a.X[1], a.X[0],
+            a.Y[1], a.Y[0],
+            b.X[1], b.X[0],
+            b.Y[1], b.Y[0]
+        );
 
-    function equals(
-        G1Point memory a, G1Point memory b
-    ) view internal returns (bool) {
-        return a.X==b.X && a.Y==b.Y;
+        return G2Point([x0, x1], [y0, y1]);
+    }
+    // 内部函数：返回 a * b
+    function g2Mul(
+        G2Point memory a,
+        uint256 s
+    ) internal view returns (G2Point memory) {
+        (uint256 x1, uint256 x0, uint256 y1, uint256 y0) = ECTwistMul(
+            s,
+            a.X[1], a.X[0],
+            a.Y[1], a.Y[0]
+        );
+        return G2Point([x0, x1], [y0, y1]);
     }
 
-    function equals2(
-        G2Point memory a, G2Point memory b
-    ) view internal returns (bool) {
-        return a.X[0]==b.X[0] && a.X[1]==b.X[1] && a.Y[0]==b.Y[0] && a.Y[1]==b.Y[1];
+    // 内部函数：返回 a^{-1}
+    function g2Neg(
+        G2Point memory a
+    ) internal view returns (G2Point memory) {
+        (uint256 x1, uint256 x0, uint256 y1, uint256 y0) = ECTwistNeg(
+            a.X[1], a.X[0],
+            a.Y[1], a.Y[0]
+        );
+        return G2Point([x0, x1], [y0, y1]);
     }
 
-    function HashToG1(string memory str) public payable returns (G1Point memory){
+    function DLEQVerify(G1Point memory g, G1Point memory y1, G1Point memory a1, 
+                       G1Point memory h, G1Point memory y2, G1Point memory a2, 
+                       uint256 c, uint256 z) public payable returns (bool)
+    {
+        G1Point memory gG = g1mul(g, z);
+        G1Point memory y1G = g1mul(y1, c);
 
-        return g1mul(P1(), uint256(keccak256(abi.encodePacked(str))));
+        G1Point memory hG = g1mul(h, z);
+        G1Point memory y2G = g1mul(y2, c);
+
+        G1Point memory pt1 =  g1add(gG, y1G);
+        G1Point memory pt2 =  g1add(hG, y2G);
+        if ((a1.X != pt1.X) || (a1.Y != pt1.Y) || (a2.X != pt2.X) || (a2.Y != pt2.Y))
+        {
+            return false;
+        }
+        return true;
     }
+
+    /// return the result of computing the pairing check
+    /// e(p1[0], p2[0]) *  .... * e(p1[n], p2[n]) == 1
+    /// For example pairing([P1(), P1().negate()], [P2(), P2()]) should
+    /// return true.
+    function pairing(G1Point[] memory p1, G2Point[] memory p2) view internal returns (bool) {
+        require(p1.length == p2.length);
+        uint elements = p1.length;
+        uint inputSize = elements * 6;
+        uint[] memory input = new uint[](inputSize);
+        for (uint i = 0; i < elements; i++)
+        {
+            input[i * 6 + 0] = p1[i].X;
+            input[i * 6 + 1] = p1[i].Y;
+            input[i * 6 + 2] = p2[i].X[0];
+            input[i * 6 + 3] = p2[i].X[1];
+            input[i * 6 + 4] = p2[i].Y[0];
+            input[i * 6 + 5] = p2[i].Y[1];
+        }
+        uint[1] memory out;
+        bool success;
+        assembly("memory-safe") {
+            success := staticcall(sub(gas()	, 2000), 8, add(input, 0x20), mul(inputSize, 0x20), out, 0x20)
+        // Use "invalid" to make gas estimation work
+        //switch success case 0 { invalid }
+        }
+        require(success);
+        return out[0] != 0;
+    }
+
+    /// Convenience method for a pairing check for two pairs.
+    function pairingProd2(G1Point memory a1, G2Point memory a2, G1Point memory b1, G2Point memory b2) view internal returns (bool) {
+        G1Point[] memory p1 = new G1Point[](2);
+        G2Point[] memory p2 = new G2Point[](2);
+        p1[0] = a1;
+        p1[1] = b1;
+        p2[0] = a2;
+        p2[1] = b2;
+        return pairing(p1, p2);
+    }
+
+
+    //映射相关运算
+    // 将G1Point转换为映射使用的key
+    function GetPointKey(G1Point memory pk) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(pk.X, pk.Y));
+    }
+    // 添加映射项
+    function AddMapping(G1Point memory pk, string memory attribute) public {
+        bytes32 key = GetPointKey(pk);
+        SID[key]=attribute;
+    }
+    // 获取对应字符串数组
+    function GetMapping(G1Point memory pk) public view returns (string memory) {
+        return SID[GetPointKey(pk)];
+    }
+
+    mapping(bytes32 => string) public SID;
+    G1Point Generator;
+    G2Point[2] IssuerKey;
+
+    function VerifyPiV(G2Point memory g1,G2Point memory g2, G2Point memory g3, G2Point memory y1, G2Point memory a,
+                       G1Point memory h, G1Point memory y2, G1Point memory b, uint256 challenge, uint256 response1, uint256 response2) public returns (bool)
+    {
+        //check PiV
+        G2Point memory Aw = g2Mul(y1,challenge);
+        Aw=g2Add(Aw, g2Mul(g1, response1));
+        Aw=g2Add(Aw, g2);
+        Aw=g2Add(Aw,g2Neg(g2Mul(g2,challenge)));
+        //uint256(keccak256(abi.encodePacked(claim)))
+        //pk2y=g2Mul(pk2y, m);
+        Aw=g2Add(Aw, g2Mul(g3, response2));
+        G1Point memory Bw;
+        Bw=g1mul(y2, challenge);
+        Bw=g1add(Bw, g1mul(h, response1));
+        if(Aw.X[0]==a.X[0]&&Aw.X[1]==a.X[1]&&Aw.Y[0]==a.Y[0]&&Aw.Y[1]==a.Y[1]&&Bw.X==b.X&&Bw.Y==b.Y)
+        {
+            return true;
+        }
+        return false;
+    }
+
+    //Upload issuer's key
+    function UploadAcsParams(G1Point memory g,G2Point memory pkx, G2Point memory pky) public {
+        Generator=g;
+        IssuerKey[0]=pkx;
+        IssuerKey[1]=pky;
+    }
+
+    bool ProofResult=false;
+    string BuyerClaim;
+    function VerifyProof1(G1Point memory pk1,G2Point memory pk2, G2Point memory pk2x, G2Point memory pk2y, G2Point memory w, G2Point memory a,
+                       G1Point memory _u, G1Point memory v, G1Point memory b,
+                       uint256 c, uint256 rr,uint256 rm,  G1Point memory _s,
+                       string memory claim) public returns (bool)
+    {
+        //Check u'!=1
+        G1Point memory temp=g1mul(v, 0);
+        if(_u.X!=temp.X&&_u.Y!=temp.Y)
+        {
+            if (VerifyPiV(pk2, pk2x, pk2y, w, a, _u, v, b, c, rr, rm)){
+               //Check pairing
+                if (pairingProd2(g1neg(_u),w,g1add(_s,v),pk2)&&pairingProd2(pk1, IssuerKey[0], g1neg(Generator), pk2x)&&pairingProd2(pk1, IssuerKey[1], g1neg(Generator), pk2y))
+                {
+                    BuyerClaim=claim;
+                    return true;
+                }
+            }
+        }
+    } 
+
+    function VerifyProof2(G1Point memory _c, G1Point memory v, G1Point memory a1, 
+                         G1Point memory pk1,G1Point memory c,G1Point memory a2,
+                         uint256 challenge, uint256 response) public returns (bool) 
+    {
+        if (keccak256(abi.encodePacked(BuyerClaim)) != keccak256(abi.encodePacked(""))){
+            if (DLEQVerify(_c, v, a1, pk1, c, a2, challenge, response)){
+                ProofResult=true;
+                bytes32 key = GetPointKey(pk1);
+                SID[key]=BuyerClaim;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function GetProofResult() public view returns (bool){
+        return ProofResult;
+    }
+
+    function getSID(G1Point memory pk) public view returns (string memory) {
+        return SID[GetPointKey(pk)];
+    }
+
+    function CheckClaim(G1Point memory pk, string memory attribute) public view returns (bool) {
+        bytes32 key = GetPointKey(pk);
+        return keccak256(abi.encodePacked(SID[key])) == keccak256(abi.encodePacked(attribute));
+    }
+
+
+
+    //Shopping Order
+    struct Purchase {
+        string productID;
+        uint256 quantity;
+        uint256 price;
+        uint256 lockedAmount;
+        G1Point sellerPubKey;
+        G1Point buyerPubKey;
+        bool isOngoing;
+        bool isLocked;
+    }
+
+    mapping(address => mapping(string => uint256)) public productPrices;
+
+    // orderBook[seller][buyer] => Purchase
+    // 改为三级映射，支持多个订单
+    mapping(address => mapping(address => mapping(string => Purchase))) public orderBook;
+    mapping(address => uint256) balances; //stores the Eth balances of sellers
+
+    event BroadcastPubKey(
+        address indexed _seller,
+        address indexed _buyer,
+        string productID,
+        uint256 quantity,
+        uint256 buyerPubKeyX,
+        uint256 buyerPubKeyY,
+        uint256 price
+    );
+
+    event SellerAccepted(
+    address indexed seller,
+    address indexed buyer,
+    uint256 pubKeyX,
+    uint256 pubKeyY);
+
+    //卖家设置商品价格函数
+    function setProductPrice(string memory productID, uint256 unitPrice) public {
+        require(unitPrice > 0, "Unit price must be greater than zero");
+        productPrices[msg.sender][productID] = unitPrice;
+    }
+
+    //使用block信息和地址hash生成 orderID 
+    function _generateOrderID(address buyer) internal view returns (string memory) {
+        bytes32 raw = keccak256(abi.encodePacked(block.timestamp, buyer, msg.sender, blockhash(block.number - 1)));
+            return toHexString(raw);
+    }
+
+    function toHexString(bytes32 data) internal pure returns (string memory) {
+        bytes memory hexChars = "0123456789abcdef";
+        bytes memory str = new bytes(64);
+        for (uint i = 0; i < 32; i++) {
+            str[i*2] = hexChars[uint8(data[i] >> 4)];
+            str[1+i*2] = hexChars[uint8(data[i] & 0x0f)];
+        }
+        return string(str);
+    }
+
+    // 判断G1Point是否为零点（默认）
+    function _isZeroPoint(G1Point memory point) internal pure returns (bool) {
+        return point.X == 0 && point.Y == 0;
+    }
+
+    // 买家创建订单，生成唯一orderID，返回给买家
+    function buyerCreateOrder(
+        address _seller,
+        string memory _productID,
+        uint256 _quantity,
+        G1Point memory _buyerPK
+    ) public payable returns (string memory) {
+        require(_quantity > 0, "Quantity must be positive");
+        uint256 unitPrice = productPrices[_seller][_productID];
+        require(unitPrice > 0, "Product not found");
+
+        uint256 totalPrice = unitPrice * _quantity;
+        require(msg.value == totalPrice, "Incorrect ETH sent");
+
+        string memory orderID = _generateOrderID(msg.sender);
+        Purchase storage existing = orderBook[_seller][msg.sender][orderID];
+        require(!existing.isOngoing, "Order already exists");
+
+        orderBook[_seller][msg.sender][orderID] = Purchase({
+            productID: _productID,
+            quantity: _quantity,
+            price: totalPrice,
+            lockedAmount: msg.value,
+            sellerPubKey: G1Point(0, 0),
+            buyerPubKey: _buyerPK,
+            isOngoing: true,
+            isLocked: true
+        });
+
+        emit BroadcastPubKey(
+            _seller,
+            msg.sender,
+            _productID,
+            _quantity,
+            _buyerPK.X,
+            _buyerPK.Y,
+            totalPrice
+        );
+        return orderID;
+    }
+
+
+    // 卖家确认订单，需传orderID
+    function sellerAcceptOrder(
+        address _buyer,
+        string memory _orderID,
+        string memory attribute,
+        uint256 _pubKeyX,
+        uint256 _pubKeyY
+    ) public {
+        Purchase storage order = orderBook[msg.sender][_buyer][_orderID];
+        require(order.isOngoing, "Order not active");
+        require(order.isLocked, "Funds not locked");
+
+        bool checkPassed = CheckClaim(order.buyerPubKey, attribute);
+        if (!checkPassed) {
+            uint256 refundAmount = order.price;
+            delete orderBook[msg.sender][_buyer][_orderID];
+            (bool success, ) = payable(_buyer).call{value: refundAmount}("");
+            require(success, "Refund failed");
+            return;
+        }
+        order.sellerPubKey = G1Point(_pubKeyX, _pubKeyY);
+        // orderID字段可保持不变或更新为确认时生成的ID
+        emit SellerAccepted(msg.sender, _buyer, _pubKeyX, _pubKeyY);
+    }
+
+    //买家确认交易成功（如收到商品）
+    event OrderCompleted(address indexed buyer, address indexed seller, uint256 amount);
+    function buyerConfirmWithCode(
+        address _seller,
+        string memory _orderID,
+        string memory verificationCode
+    ) public {
+        Purchase storage order = orderBook[_seller][msg.sender][_orderID];
+        require(order.isOngoing, "Order not active");
+        require(order.isLocked, "Funds not locked");
+        // require(verifyCode(verificationCode), "Invalid code");
+
+        uint256 amount = order.price;
+        delete orderBook[_seller][msg.sender][_orderID];
+        balances[_seller] += amount;
+
+        emit OrderCompleted(msg.sender, _seller, amount);
+    }
+
+    //卖家提现余额
+    function withdrawPayment() public {
+        uint256 balance = balances[msg.sender];
+        require(balance > 0, "No funds to withdraw");
+        balances[msg.sender] = 0;
+        (bool success, ) = payable(msg.sender).call{value: balance}("");
+        require(success, "Transfer failed.");
+    }
+
+
+    // 买家取消订单，前提订单未被确认（sellerPubKey == 0）
+    function buyerCancelOrder(address _seller, string memory _orderID) public {
+        Purchase storage order = orderBook[_seller][msg.sender][_orderID];
+        require(order.isOngoing, "Order not active");
+        require(_isZeroPoint(order.sellerPubKey), "Order already confirmed, cannot cancel by buyer");
+
+        uint256 refundAmount = order.lockedAmount;
+        delete orderBook[_seller][msg.sender][_orderID];
+
+        (bool success, ) = payable(msg.sender).call{value: refundAmount}("");
+        require(success, "Refund failed");
+    }
+
+    // 卖家取消订单，前提订单已被确认（sellerPubKey != 0）
+    function sellerCancelOrder(address _buyer, string memory _orderID) public {
+        Purchase storage order = orderBook[msg.sender][_buyer][_orderID];
+        require(order.isOngoing, "Order not active");
+        require(!_isZeroPoint(order.sellerPubKey), "Order not confirmed yet, seller cannot cancel");
+
+        uint256 refundAmount = order.lockedAmount;
+        delete orderBook[msg.sender][_buyer][_orderID];
+
+        (bool success, ) = payable(_buyer).call{value: refundAmount}("");
+        require(success, "Refund failed");
+    }
+
+
+
 
 }

@@ -15,13 +15,11 @@ type Params struct {
 }
 
 type AttributeKey struct {
-	R        *big.Int
 	D        *bn256.G1
 	KeyValue map[string]map[*bn256.G1]*bn256.G2
 }
 
 type Ciphertext struct {
-	S         *big.Int
 	Policy    *PolicyNode
 	C         *bn256.GT
 	_C        *bn256.G2
@@ -34,9 +32,7 @@ func Setup() (*big.Int, *Params) {
 	g2 := new(bn256.G2).ScalarBaseMult(big.NewInt(1))
 
 	alpha, _ := rand.Int(rand.Reader, bn256.Order)
-	gt := new(bn256.GT).ScalarBaseMult(alpha)
-	//fmt.Printf("gt=%v\n", gt)
-
+	gt := new(bn256.GT).ScalarMult(bn256.Pair(g1, g2), alpha)
 	return alpha, &Params{
 		G1: g1,
 		G2: g2,
@@ -44,15 +40,15 @@ func Setup() (*big.Int, *Params) {
 	}
 }
 
-func KeyGen(MSK *big.Int, PK *Params, Su []string) *AttributeKey {
+func KeyGen(PKu *bn256.G1, MSK *big.Int, PK *Params, Su []string) *AttributeKey {
 	r, _ := rand.Int(rand.Reader, bn256.Order)
 	rx := make([]*big.Int, len(Su))
 	keyValue := make(map[string]map[*bn256.G1]*bn256.G2)
 
 	for i := 0; i < len(Su); i++ {
 		rx[i], _ = rand.Int(rand.Reader, bn256.Order)
-		dx := new(bn256.G1).Add(new(bn256.G1).ScalarBaseMult(r), new(bn256.G1).ScalarMult(Convert.StringToG1(Su[i]), rx[i]))
-		_dx := new(bn256.G2).ScalarBaseMult(rx[i])
+		dx := new(bn256.G1).Add(new(bn256.G1).ScalarMult(PKu, r), new(bn256.G1).ScalarMult(Convert.StringToG1(Su[i]), rx[i]))
+		_dx := new(bn256.G2).ScalarMult(PK.G2, rx[i])
 
 		// 确保 keyValue[Su[i]] 已经初始化
 		if _, exists := keyValue[Su[i]]; !exists {
@@ -62,10 +58,9 @@ func KeyGen(MSK *big.Int, PK *Params, Su []string) *AttributeKey {
 		// 现在可以安全地赋值
 		keyValue[Su[i]][dx] = _dx
 	}
-	d := new(bn256.G1).ScalarBaseMult(new(big.Int).Add(MSK, r))
+	d := new(bn256.G1).ScalarMult(PKu, new(big.Int).Add(MSK, r))
 
 	return &AttributeKey{
-		R:        r,
 		D:        d,
 		KeyValue: keyValue,
 	}
@@ -111,7 +106,6 @@ func Encrypt(m *bn256.GT, tau string, PK *Params) (*Ciphertext, xsMapType) {
 	}
 
 	return &Ciphertext{
-		S:         s,
 		Policy:    policy,
 		C:         c,
 		_C:        _c,
@@ -119,7 +113,7 @@ func Encrypt(m *bn256.GT, tau string, PK *Params) (*Ciphertext, xsMapType) {
 	}, xsMap
 }
 
-func ODecrypt(attributeSet map[string]bool, CT *Ciphertext, SK *AttributeKey, xsMap xsMapType) *bn256.GT {
+func ODecrypt(attributeSet map[string]bool, CT *Ciphertext, SK *AttributeKey, xsMap xsMapType, PK *Params) *bn256.GT {
 	// ======== 切换不同属性集，验证左右子树恢复 ========
 	// 左子树满足策略：A + C
 	//attrs := map[string]bool{"Age>18": true, "Man": true}
@@ -169,41 +163,19 @@ func ODecrypt(attributeSet map[string]bool, CT *Ciphertext, SK *AttributeKey, xs
 						left := bn256.Pair(dx, cy)
 						right := bn256.Pair(_cy, _dx)
 						usedshare.Share = new(bn256.GT).Add(left, new(bn256.GT).Neg(right))
-						// testShare := bn256.Pair(new(bn256.G1).ScalarBaseMult(SK.R), cy)
-						// if usedshare.Share.String() == testShare.String() {
-						// 	fmt.Printf("测试成功！！！\n")
-						// }
+						usedShares = append(usedShares, usedshare)
 					}
 				}
 			}
 		}
 	}
-	recovered := RecoverSecret(usedShares, coeffs, FieldOrder)
-	//testrecovered := bn256.Pair(new(bn256.G1).ScalarBaseMult(SK.R), new(bn256.G2).ScalarBaseMult(CT.S))
-	// fmt.Printf("testIR=%v\n", testrecovered)
-	// if recovered.String() == testrecovered.String() {
-	// 	fmt.Printf("测试成功！！！\n")
-	// 	fmt.Printf("IR=%v\n", recovered)
-	// }
+	temp := RecoverSecret(usedShares, coeffs, FieldOrder)
+	recovered := new(bn256.GT).Add(bn256.Pair(SK.D, CT._C), new(bn256.GT).Neg(temp))
 	return recovered
 }
 
-func Decrypt(IR *bn256.GT, CT *Ciphertext, SK *AttributeKey, PK *Params, MSK *big.Int) *bn256.GT {
-
-	//temp := new(bn256.GT).Add(bn256.Pair(SK.D, CT._C), new(bn256.GT).Neg(IR))
-	left1 := bn256.Pair(new(bn256.G1).ScalarBaseMult(MSK), new(bn256.G2).ScalarBaseMult(CT.S))
-	left2 := bn256.Pair(new(bn256.G1).ScalarBaseMult(SK.R), new(bn256.G2).ScalarBaseMult(CT.S))
-	left := new(bn256.GT).Add(left1, left2)
-	ir := bn256.Pair(new(bn256.G1).ScalarBaseMult(SK.R), new(bn256.G2).ScalarBaseMult(CT.S))
-	//temp := new(bn256.GT).Add(bn256.Pair(SK.D, CT._C), new(bn256.GT).Neg(IR))
-	temp := new(bn256.GT).Add(left, new(bn256.GT).Neg(ir))
-	//testTemp := new(bn256.GT).ScalarMult(PK.GT, CT.S)
-	//testTemp := new(bn256.GT).ScalarMult(new(bn256.GT).ScalarBaseMult(MSK), CT.S)
-	fmt.Printf("MSK=%v\n", MSK)
-
-	if PK.GT.String() == new(bn256.GT).ScalarBaseMult(MSK).String() {
-		fmt.Printf("测试成功！！！\n")
-	}
+func Decrypt(IR *bn256.GT, SKu *big.Int, CT *Ciphertext) *bn256.GT {
+	temp := new(bn256.GT).ScalarMult(IR, SKu.ModInverse(SKu, FieldOrder))
 	m := new(bn256.GT).Add(CT.C, new(bn256.GT).Neg(temp))
 	return m
 }

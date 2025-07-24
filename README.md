@@ -1,5 +1,4 @@
-# RDKG-DAC-SSO
- 基于多属性的匿名凭证构造以及Token生成
+# Obfushop
 
 
 # Pre-requisites
@@ -42,7 +41,7 @@ Version: 0.8.25-develop
 2. start ganache
 
     ```bash(Linux os)
-    ganache-cli --mnemonic "DAC" -l 90071992547 -e 100000000
+    ganache-cli --mnemonic "Obfushop" -l 90071992547 -e 100000000
     ```
 
 3. Compile the smart contract code

@@ -18,9 +18,18 @@ type PiS struct {
 type PiV struct {
 	Base1 *bn256.G2
 	Base2 *bn256.G2
+	RG    *bn256.G2
+	RH    *bn256.G1
 	C     *big.Int // challenge
 	Rm    *big.Int // 响应属性
 	Rr    *big.Int // 响应随机数 t
+}
+
+type Pi_r struct {
+	C  *big.Int // challenge
+	Z  *big.Int // 响应随机数 t
+	RG *bn256.G1
+	RH *bn256.G1
 }
 
 func ToChallenge(elements []*bn256.G1) *big.Int {
@@ -133,10 +142,10 @@ func MakePiV(params *Params, sk *big.Int, issuerkey *IssuerKey, u, _u *bn256.G1,
 	rr := new(big.Int).Sub(wr, new(big.Int).Mul(c, r))
 	rr.Mod(rr, params.Order)
 
-	return &PiV{Base1: base1, Base2: base2, C: c, Rm: rm, Rr: rr}, nil
+	return &PiV{Base1: base1, Base2: base2, RG: Aw, RH: Bw, C: c, Rm: rm, Rr: rr}, nil
 }
 
-func VerifyPiV(params *Params, pk *bn256.G2, _u *bn256.G1, w *bn256.G2, v *bn256.G1, proof *PiV) (bool, error) {
+func VerifyPiV(pk *bn256.G2, _u *bn256.G1, w *bn256.G2, v *bn256.G1, proof *PiV) bool {
 
 	// 1. Aw' = c·kappa + rt·g2 + (1 - c)·α + ∑ rmᵢ·βᵢ
 	Aw := new(bn256.G2).ScalarMult(w, proof.C)
@@ -150,10 +159,52 @@ func VerifyPiV(params *Params, pk *bn256.G2, _u *bn256.G1, w *bn256.G2, v *bn256
 	Bw := new(bn256.G1).ScalarMult(v, proof.C)
 	Bw.Add(Bw, new(bn256.G1).ScalarMult(_u, proof.Rr))
 
-	// 3. 构造挑战 c'
-	g1Inputs := []*bn256.G1{_u, v, Bw}
-	g2Inputs := []*bn256.G2{w, Aw}
-	cPrime := ToChallengeMixed(g1Inputs, g2Inputs)
+	if Aw.String() == proof.RG.String() && Bw.String() == proof.RH.String() {
+		return true
+	}
 
-	return proof.C.Cmp(cPrime) == 0, nil
+	return false
+}
+
+func MakePi_r(params *Params, _c, pk1 *bn256.G1, _r *big.Int, v *bn256.G1, c *bn256.G1) (*Pi_r, error) {
+
+	//生成承诺
+	k, err := rand.Int(rand.Reader, params.Order)
+	if err != nil {
+		return nil, err
+	}
+	rG := new(bn256.G1).ScalarMult(_c, k)
+	rH := new(bn256.G1).ScalarMult(pk1, k)
+
+	// 计算挑战
+	new_hash := sha256.New()
+	new_hash.Write(v.Marshal())
+	new_hash.Write(c.Marshal())
+	new_hash.Write(rG.Marshal())
+	new_hash.Write(rH.Marshal())
+
+	cb := new_hash.Sum(nil)
+	challenge := new(big.Int).SetBytes(cb)
+	challenge.Mod(challenge, params.Order)
+
+	// 生成相应
+	response := new(big.Int).Mul(challenge, _r)
+	response.Sub(k, response)
+	response.Mod(response, params.Order)
+
+	return &Pi_r{C: challenge, Z: response, RG: rG, RH: rH}, nil
+}
+
+func VerifyPi_r(params *Params, _c, pk1 *bn256.G1, v *bn256.G1, c *bn256.G1, Pi *Pi_r) bool {
+
+	zG := new(bn256.G1).ScalarMult(_c, Pi.Z)
+	zH := new(bn256.G1).ScalarMult(pk1, Pi.Z)
+	cxG := new(bn256.G1).ScalarMult(v, Pi.C)
+	cxH := new(bn256.G1).ScalarMult(c, Pi.C)
+	a := new(bn256.G1).Add(zG, cxG)
+	b := new(bn256.G1).Add(zH, cxH)
+	if !(Pi.RG.String() == a.String() && Pi.RH.String() == b.String()) {
+		return false
+	}
+	return true
 }
