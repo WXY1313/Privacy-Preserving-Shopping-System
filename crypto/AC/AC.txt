@@ -11,8 +11,8 @@ import (
 type IssuerKey struct {
 	SK1 *big.Int
 	SK2 *big.Int
-	PK1 *bn256.G1
-	PK2 *bn256.G1
+	PK1 *bn256.G2
+	PK2 *bn256.G2
 }
 
 type Params struct {
@@ -23,29 +23,32 @@ type Params struct {
 }
 
 type Req struct {
-	gamma *bn256.G2
+	gamma *bn256.G1
 	Cm    *bn256.G1   // 承诺 cm
-	C     []*bn256.G2 // ElGamal 密文 (aᵢ, bᵢ)
+	C     []*bn256.G1 // ElGamal 密文 (aᵢ, bᵢ)
 	PiS   *PiS        // 零知识证明 π_s
 }
 
 type BlindSignature struct {
-	U *bn256.G2 // Hash(cm)
-	C []*bn256.G2
+	U *bn256.G1 // Hash(cm)
+	C []*bn256.G1
 }
 
 type Cred struct {
-	U     *bn256.G2
-	Sigma *bn256.G2
+	U     *bn256.G1
+	Sigma *bn256.G1
 }
 
 type Proof struct {
 	Value *big.Int
-	U     *bn256.G2 //
-	S     *bn256.G2 //
-	// W     *bn256.G1
-	// V     *bn256.G1
-	// DLEQ  *DLEQ
+	C     *bn256.G1
+	C_    *bn256.G1
+	W     *bn256.G2 // commitment in G2
+	V     *bn256.G1 // randomization in G1
+	U     *bn256.G1 //
+	S     *bn256.G1 //
+	PiV   *PiV      // PiV      interface{}  // optional zero-knowledge proof
+	Pi_R  *Pi_r
 }
 
 func Setup() *Params {
@@ -69,8 +72,8 @@ func KeyGen(params *Params) *IssuerKey {
 	x, _ := rand.Int(rand.Reader, params.Order)
 	y, _ := rand.Int(rand.Reader, params.Order)
 
-	X := new(bn256.G1).ScalarBaseMult(x)
-	Y := new(bn256.G1).ScalarBaseMult(y)
+	X := new(bn256.G2).ScalarBaseMult(x)
+	Y := new(bn256.G2).ScalarBaseMult(y)
 
 	return &IssuerKey{
 		SK1: x,
@@ -84,16 +87,16 @@ func KeyGen(params *Params) *IssuerKey {
 func PrepareBlindSign(params *Params, m *big.Int) (*big.Int, *Req) {
 
 	d, _ := rand.Int(rand.Reader, params.Order)
-	gamma := new(bn256.G2).ScalarBaseMult(d)
+	gamma := new(bn256.G1).ScalarBaseMult(d)
 
 	o, _ := rand.Int(rand.Reader, params.Order)
 	Cm := new(bn256.G1).Add(new(bn256.G1).ScalarBaseMult(o), new(bn256.G1).ScalarMult(params.H1, m))
 
-	u, _ := bn256.HashG2(string(Cm.Marshal()))
+	u, _ := bn256.HashG1(string(Cm.Marshal()))
 	k, _ := rand.Int(rand.Reader, params.Order)
-	C := make([]*bn256.G2, 2)
-	C[0] = new(bn256.G2).ScalarBaseMult(k)
-	C[1] = new(bn256.G2).Add(new(bn256.G2).ScalarMult(gamma, k), new(bn256.G2).ScalarMult(u, m))
+	C := make([]*bn256.G1, 2)
+	C[0] = new(bn256.G1).ScalarBaseMult(k)
+	C[1] = new(bn256.G1).Add(new(bn256.G1).ScalarMult(gamma, k), new(bn256.G1).ScalarMult(u, m))
 
 	// 5. 构建零知识证明 π_s
 	piS, _ := MakePiS(params, gamma, C, Cm, k, o, m)
@@ -115,13 +118,13 @@ func BlindSign(params *Params, issuerkey *IssuerKey, req *Req) *BlindSignature {
 	}
 	fmt.Println("π_s valid:", Result)
 
-	// 1. 计算 h = HashG2(cm)
+	// 1. 计算 h = HashG1(cm)
 	hBytes := req.Cm.Marshal()
-	u, err := bn256.HashG2(string(hBytes))
+	u, err := bn256.HashG1(string(hBytes))
 
-	_C := make([]*bn256.G2, 2)
-	_C[0] = new(bn256.G2).ScalarMult(req.C[0], issuerkey.SK2)
-	_C[1] = new(bn256.G2).Add(new(bn256.G2).ScalarMult(u, issuerkey.SK1), new(bn256.G2).ScalarMult(req.C[1], issuerkey.SK2))
+	_C := make([]*bn256.G1, 2)
+	_C[0] = new(bn256.G1).ScalarMult(req.C[0], issuerkey.SK2)
+	_C[1] = new(bn256.G1).Add(new(bn256.G1).ScalarMult(u, issuerkey.SK1), new(bn256.G1).ScalarMult(req.C[1], issuerkey.SK2))
 
 	return &BlindSignature{
 		U: u,
@@ -131,7 +134,7 @@ func BlindSign(params *Params, issuerkey *IssuerKey, req *Req) *BlindSignature {
 
 func ObtainCred(blindSigs *BlindSignature, d *big.Int) *Cred {
 	// Step 1: 解盲BlindSignature → Signature
-	sigma := new(bn256.G2).Add(blindSigs.C[1], new(bn256.G2).Neg(new(bn256.G2).ScalarMult(blindSigs.C[0], d)))
+	sigma := new(bn256.G1).Add(blindSigs.C[1], new(bn256.G1).Neg(new(bn256.G1).ScalarMult(blindSigs.C[0], d)))
 
 	return &Cred{
 		U:     blindSigs.U,
@@ -139,42 +142,58 @@ func ObtainCred(blindSigs *BlindSignature, d *big.Int) *Cred {
 	}
 }
 
-func ProveCred(params *Params, sk *big.Int, issuerkey *IssuerKey, cred *Cred, m *big.Int) (*Proof, error) {
-	// 1.r, randomize sigma
+func ProveCred(pk1 *bn256.G1, params *Params, sk *big.Int, issuerkey *IssuerKey, cred *Cred, m *big.Int) (*Proof, error) {
+	// 1. r', randomize sigma
+	_r, _ := rand.Int(rand.Reader, params.Order)
+	_u := new(bn256.G1).ScalarMult(cred.U, _r)
+	_s := new(bn256.G1).ScalarMult(cred.Sigma, _r)
+	c := new(bn256.G1).ScalarMult(pk1, _r)
+	// 2. compute Kappa = r·g2 + alpha + ∑ betaᵢ·mᵢ
 	r, _ := rand.Int(rand.Reader, params.Order)
-	u := new(bn256.G2).ScalarMult(cred.U, r)
-	u.ScalarMult(u, sk)
-	s := new(bn256.G2).ScalarMult(cred.Sigma, r)
-	// w := new(bn256.G1).ScalarMult(issuerkey.PK1, sk)
-	// v := new(bn256.G1).ScalarMult(issuerkey.PK2, sk)
-	//dleq, _ := DLEQProof(params, params.G1, issuerkey.PK1, issuerkey.PK2, sk, pk1, w, v)
+	_c := new(bn256.G1).ScalarMult(cred.U, r)
+	w := new(bn256.G2).Add(new(bn256.G2).ScalarBaseMult(r), new(bn256.G2).Add(issuerkey.PK1, new(bn256.G2).ScalarMult(issuerkey.PK2, m)))
+	w.ScalarMult(w, sk)
+	v := new(bn256.G1).ScalarMult(_u, r)
 
+	// 4. 构造 π_v 证明
+	piv, _ := MakePiV(params, sk, issuerkey, cred.U, _u, m, r, w, v)
+	// 5.构造 π_r' 证明
+	pi_r, _ := MakePi_r(params, _c, pk1, _r, v, c)
 	// 4. output theta
 	proof := &Proof{
 		Value: m,
-		U:     u,
-		S:     s,
+		C:     c,
+		C_:    _c,
+		W:     w,
+		V:     v,
+		U:     _u,
+		S:     _s,
+		PiV:   piv,
+		Pi_R:  pi_r,
 	}
 	return proof, nil
 }
 
 func VerifyCred(params *Params, pk1 *bn256.G1, pk2 *bn256.G2, issuerkey *IssuerKey, proof *Proof) (bool, error) {
 
+	//  π_v 证明校验
+	result := VerifyPiV(pk2, proof.U, proof.W, proof.V, proof.PiV)
+	if result == false {
+		fmt.Printf("π_v验证失败!!!\n")
+		return false, nil
+	}
+	//fmt.Println("π_v valid:", result)
+
+	resultPi_r := VerifyPi_r(params, proof.C_, pk1, proof.V, proof.C, proof.Pi_R)
+	if resultPi_r == false {
+		fmt.Printf("π_r验证失败!!!\n")
+		return false, nil
+	}
+
 	// Check h != identity && pairing matches
-	if proof.U.String() == new(bn256.G2).ScalarBaseMult(big.NewInt(0)).String() {
-		//fmt.Printf("proof.U False!!!\n")
+	if proof.U.String() == new(bn256.G1).ScalarBaseMult(big.NewInt(0)).String() {
 		return false, nil
 	}
-	if bn256.Pair(params.G1, pk2).String() != bn256.Pair(pk1, params.G2).String() {
-		return false, nil
-	}
-	// if !VerifyDLEQ(params, params.G1, issuerkey.PK1, issuerkey.PK2, pk1, proof.W, proof.V, proof.DLEQ) {
-	// 	fmt.Printf("DLEQ False!!!\n")
-	// 	return false, nil
-	// }
-	left3 := bn256.Pair(new(bn256.G1).Add(issuerkey.PK1, new(bn256.G1).ScalarMult(issuerkey.PK2, proof.Value)), proof.U)
-	right3 := bn256.Pair(pk1, proof.S)
-	return left3.String() == right3.String(), nil
 
 	// left1 := bn256.Pair(pk1, issuerkey.PK1)
 	// right1 := bn256.Pair(params.G1, proof.PiV.Base1)
@@ -187,4 +206,8 @@ func VerifyCred(params *Params, pk1 *bn256.G1, pk2 *bn256.G2, issuerkey *IssuerK
 	// if left2.String() != right2.String() {
 	// 	return false, nil
 	// }
+
+	left3 := bn256.Pair(proof.U, proof.W)
+	right3 := bn256.Pair(new(bn256.G1).Add(proof.S, proof.V), pk2)
+	return left3.String() == right3.String(), nil
 }

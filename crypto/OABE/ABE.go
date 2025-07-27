@@ -4,7 +4,6 @@ import (
 	bn256 "Obfushop/bn256"
 	"Obfushop/crypto/Convert"
 	"crypto/rand"
-	"fmt"
 	"math/big"
 )
 
@@ -76,10 +75,10 @@ func Encrypt(m *bn256.GT, tau string, PK *Params) (*Ciphertext, xsMapType) {
 		panic("ParsePolicy error: " + err.Error())
 	}
 	// 打印策略树结构
-	PrintPolicyTree(policy, 0)
+	//PrintPolicyTree(policy, 0)
 
 	//attributeNum := len(CountAttributes(policy))
-	fmt.Printf("策略中包含属性:%v\n", CountAttributes(policy))
+	//fmt.Printf("策略中包含属性:%v\n", CountAttributes(policy))
 
 	// 执行秘密分享
 	shares, xsMap, err := ComputeShares(s, policy, FieldOrder)
@@ -91,7 +90,7 @@ func Encrypt(m *bn256.GT, tau string, PK *Params) (*Ciphertext, xsMapType) {
 	// 打印所有属性份额
 	for i := 0; i < len(shares); i++ {
 		s := shares[i] // 通过索引访问元素
-		fmt.Printf("%s: X=%v, S=%v\n", s.Attribute, s.X, s.Share)
+		//fmt.Printf("%s: X=%v, S=%v\n", s.Attribute, s.X, s.Share)
 		cy := new(bn256.G2).ScalarMult(PK.G2, s.Share)
 		_cy := new(bn256.G1).ScalarMult(Convert.StringToG1(s.Attribute), s.Share)
 		// 初始化嵌套的 map
@@ -140,15 +139,14 @@ func ODecrypt(attributeSet map[string]bool, CT *Ciphertext, SK *AttributeKey, xs
 			}
 		}
 	}
-	fmt.Printf("OABE attrX:%v\n", attrX)
+	//fmt.Printf("OABE attrX:%v\n", attrX)
 
 	// 计算拉格朗日系数
 	coeffs := GetCoefficientsNoPrune(CT.Policy, attributeSet, attrX, xsMap, FieldOrder)
 
-	fmt.Println("Coeffs:")
-	for attr, coeff := range coeffs {
-		fmt.Printf("%s -> %v\n", attr, coeff)
-	}
+	// for attr, coeff := range coeffs {
+	// 	fmt.Printf("%s -> %v\n", attr, coeff)
+	// }
 
 	// 根据属性份额和系数恢复秘密
 	var usedShares []DecShare

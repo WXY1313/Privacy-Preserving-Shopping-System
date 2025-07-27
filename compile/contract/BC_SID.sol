@@ -20,6 +20,25 @@ contract BC_SID {
         uint256 Y;
     }
 
+    struct G2Point {
+        uint256[2] X;
+        uint256[2] Y;
+    }
+
+
+    // 比较 proof.U 是否为 G2 群的单位元
+    function isG2Zero(G2Point memory point2) public view returns (bool) {
+        // 比较 proof.U 的 X 和 Y 是否都为单位元
+        uint256[2] memory G2_ZERO_X = [uint256(0), uint256(0)];
+        uint256[2] memory G2_ZERO_Y = [uint256(0), uint256(0)];
+        if (point2.X[0] == G2_ZERO_X[0] && point2.X[1] == G2_ZERO_X[1] && 
+            point2.Y[0] == G2_ZERO_Y[0] && point2.Y[1] == G2_ZERO_Y[1]) {
+            return true; // 等于单位元
+        }
+        return false; // 不等于单位元
+    }
+
+
     //G1相关运算
 
     /// return the sum of two points of G1
@@ -63,435 +82,26 @@ contract BC_SID {
     }
 
 
-    struct G2Point {
-        uint256[2] X;
-        uint256[2] Y;
-    }
+  
 
-    //G2相关运算
-    uint256 internal constant FIELD_MODULUS = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47;
-    uint256 internal constant TWISTBX = 0x2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5;
-    uint256 internal constant TWISTBY = 0x9713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2;
-    uint internal constant PTXX = 0;
-    uint internal constant PTXY = 1;
-    uint internal constant PTYX = 2;
-    uint internal constant PTYY = 3;
-    uint internal constant PTZX = 4;
-    uint internal constant PTZY = 5;
-
-    /**
-     * @notice Add two twist points
-     * @param pt1xx Coefficient 1 of x on point 1
-     * @param pt1xy Coefficient 2 of x on point 1
-     * @param pt1yx Coefficient 1 of y on point 1
-     * @param pt1yy Coefficient 2 of y on point 1
-     * @param pt2xx Coefficient 1 of x on point 2
-     * @param pt2xy Coefficient 2 of x on point 2
-     * @param pt2yx Coefficient 1 of y on point 2
-     * @param pt2yy Coefficient 2 of y on point 2
-     * @return (pt3xx, pt3xy, pt3yx, pt3yy)
-     */
-    function ECTwistAdd(
-        uint256 pt1xx, uint256 pt1xy,
-        uint256 pt1yx, uint256 pt1yy,
-        uint256 pt2xx, uint256 pt2xy,
-        uint256 pt2yx, uint256 pt2yy
-    ) public view returns (
-        uint256, uint256,
-        uint256, uint256
-    ) {
-        if (
-            pt1xx == 0 && pt1xy == 0 &&
-            pt1yx == 0 && pt1yy == 0
-        ) {
-            if (!(
-                pt2xx == 0 && pt2xy == 0 &&
-                pt2yx == 0 && pt2yy == 0
-            )) {
-                assert(_isOnCurve(
-                    pt2xx, pt2xy,
-                    pt2yx, pt2yy
-                ));
-            }
-            return (
-                pt2xx, pt2xy,
-                pt2yx, pt2yy
-            );
-        } else if (
-            pt2xx == 0 && pt2xy == 0 &&
-            pt2yx == 0 && pt2yy == 0
-        ) {
-            assert(_isOnCurve(
-                pt1xx, pt1xy,
-                pt1yx, pt1yy
-            ));
-            return (
-                pt1xx, pt1xy,
-                pt1yx, pt1yy
-            );
-        }
-        assert(_isOnCurve(
-            pt1xx, pt1xy,
-            pt1yx, pt1yy
-        ));
-        assert(_isOnCurve(
-            pt2xx, pt2xy,
-            pt2yx, pt2yy
-        ));
-
-        uint256[6] memory pt3 = _ECTwistAddJacobian(
-            pt1xx, pt1xy,
-            pt1yx, pt1yy,
-            1,     0,
-            pt2xx, pt2xy,
-            pt2yx, pt2yy,
-            1,     0
-        );
-
-        return _fromJacobian(
-            pt3[PTXX], pt3[PTXY],
-            pt3[PTYX], pt3[PTYY],
-            pt3[PTZX], pt3[PTZY]
-        );
-    }
-    /**
-     * @notice Multiply a twist point by a scalar
-     * @param s     Scalar to multiply by
-     * @param pt1xx Coefficient 1 of x
-     * @param pt1xy Coefficient 2 of x
-     * @param pt1yx Coefficient 1 of y
-     * @param pt1yy Coefficient 2 of y
-     * @return (pt2xx, pt2xy, pt2yx, pt2yy)
-     */
-    function ECTwistMul(
-        uint256 s,
-        uint256 pt1xx, uint256 pt1xy,
-        uint256 pt1yx, uint256 pt1yy
-    ) public view returns (
-        uint256, uint256,
-        uint256, uint256
-    ) {
-        uint256 pt1zx = 1;
-        if (
-            pt1xx == 0 && pt1xy == 0 &&
-            pt1yx == 0 && pt1yy == 0
-        ) {
-            pt1xx = 1;
-            pt1yx = 1;
-            pt1zx = 0;
-        } else {
-            assert(_isOnCurve(
-                pt1xx, pt1xy,
-                pt1yx, pt1yy
-            ));
-        }
-        uint256[6] memory pt2 = _ECTwistMulJacobian(
-            s,
-            pt1xx, pt1xy,
-            pt1yx, pt1yy,
-            pt1zx, 0
-        );
-        return _fromJacobian(
-            pt2[PTXX], pt2[PTXY],
-            pt2[PTYX], pt2[PTYY],
-            pt2[PTZX], pt2[PTZY]
-        );
-    }
-    function ECTwistNeg(uint256 pt1xx, uint256 pt1xy, uint256 pt1yx, uint256 pt1yy) pure internal returns (uint256, uint256,uint256, uint256) {
-        // The prime q in the base field F_q for G2
-        uint q = 21888242871839275222246405745257275088696311157297823662689037894645226208583;
-        if (pt1xx == 0 && pt1xy == 0 && pt1yx == 0 && pt1yy == 0)
-            return (0, 0, 0, 0);
-        return (pt1xx,pt1xy, q - (pt1yx % q), q - (pt1yy % q));
-    }
-    /**
-     * @notice Get the field modulus
-     * @return The field modulus
-     */
-    function GetFieldModulus() public pure returns (uint256) {
-        return FIELD_MODULUS;
-    }
-    function submod2(uint256 a, uint256 b, uint256 n) internal pure returns (uint256) {
-        return addmod(a, n - b, n);
-    }
-    function _FQ2Mul(
-        uint256 xx, uint256 xy,
-        uint256 yx, uint256 yy
-    ) internal pure returns (uint256, uint256) {
-        return (
-            submod2(mulmod(xx, yx, FIELD_MODULUS), mulmod(xy, yy, FIELD_MODULUS), FIELD_MODULUS),
-            addmod(mulmod(xx, yy, FIELD_MODULUS), mulmod(xy, yx, FIELD_MODULUS), FIELD_MODULUS)
-        );
-    }
-    function _FQ2Muc(
-        uint256 xx, uint256 xy,
-        uint256 c
-    ) internal pure returns (uint256, uint256) {
-        return (
-            mulmod(xx, c, FIELD_MODULUS),
-            mulmod(xy, c, FIELD_MODULUS)
-        );
-    }
-    function _FQ2Add(
-        uint256 xx, uint256 xy,
-        uint256 yx, uint256 yy
-    ) internal pure returns (uint256, uint256) {
-        return (
-            addmod(xx, yx, FIELD_MODULUS),
-            addmod(xy, yy, FIELD_MODULUS)
-        );
-    }
-    function _FQ2Sub(
-        uint256 xx, uint256 xy,
-        uint256 yx, uint256 yy
-    ) internal pure returns (uint256 rx, uint256 ry) {
-        return (
-            submod2(xx, yx, FIELD_MODULUS),
-            submod2(xy, yy, FIELD_MODULUS)
-        );
-    }
-    function _FQ2Div(
-        uint256 xx, uint256 xy,
-        uint256 yx, uint256 yy
-    ) internal view returns (uint256, uint256) {
-        (yx, yy) = _FQ2Inv(yx, yy);
-        return _FQ2Mul(xx, xy, yx, yy);
-    }
-    function _FQ2Inv(uint256 x, uint256 y) internal view returns (uint256, uint256) {
-        uint256 inv = _modInv(addmod(mulmod(y, y, FIELD_MODULUS), mulmod(x, x, FIELD_MODULUS), FIELD_MODULUS), FIELD_MODULUS);
-        return (
-            mulmod(x, inv, FIELD_MODULUS),
-            FIELD_MODULUS - mulmod(y, inv, FIELD_MODULUS)
-        );
-    }
-    function _isOnCurve(
-        uint256 xx, uint256 xy,
-        uint256 yx, uint256 yy
-    ) internal pure returns (bool) {
-        uint256 yyx;
-        uint256 yyy;
-        uint256 xxxx;
-        uint256 xxxy;
-        (yyx, yyy) = _FQ2Mul(yx, yy, yx, yy);
-        (xxxx, xxxy) = _FQ2Mul(xx, xy, xx, xy);
-        (xxxx, xxxy) = _FQ2Mul(xxxx, xxxy, xx, xy);
-        (yyx, yyy) = _FQ2Sub(yyx, yyy, xxxx, xxxy);
-        (yyx, yyy) = _FQ2Sub(yyx, yyy, TWISTBX, TWISTBY);
-        return yyx == 0 && yyy == 0;
-    }
-    function _modInv(uint256 a, uint256 n) internal view returns (uint256 result) {
-        bool success;
-        assembly("memory-safe") {
-            let freemem := mload(0x40)
-            mstore(freemem, 0x20)
-            mstore(add(freemem,0x20), 0x20)
-            mstore(add(freemem,0x40), 0x20)
-            mstore(add(freemem,0x60), a)
-            mstore(add(freemem,0x80), sub(n, 2))
-            mstore(add(freemem,0xA0), n)
-            success := staticcall(sub(gas(), 2000), 5, freemem, 0xC0, freemem, 0x20)
-        //success := staticcall(sub(gas(), 2000), 6, input, 0xc0, r, 0x60)
-            result := mload(freemem)
-        }
-        require(success);
-    }
-    function _fromJacobian(
-        uint256 pt1xx, uint256 pt1xy,
-        uint256 pt1yx, uint256 pt1yy,
-        uint256 pt1zx, uint256 pt1zy
-    ) internal view returns (
-        uint256 pt2xx, uint256 pt2xy,
-        uint256 pt2yx, uint256 pt2yy
-    ) {
-        uint256 invzx;
-        uint256 invzy;
-        (invzx, invzy) = _FQ2Inv(pt1zx, pt1zy);
-        (pt2xx, pt2xy) = _FQ2Mul(pt1xx, pt1xy, invzx, invzy);
-        (pt2yx, pt2yy) = _FQ2Mul(pt1yx, pt1yy, invzx, invzy);
-    }
-    function _ECTwistAddJacobian(
-        uint256 pt1xx, uint256 pt1xy,
-        uint256 pt1yx, uint256 pt1yy,
-        uint256 pt1zx, uint256 pt1zy,
-        uint256 pt2xx, uint256 pt2xy,
-        uint256 pt2yx, uint256 pt2yy,
-        uint256 pt2zx, uint256 pt2zy) internal pure returns (uint256[6] memory pt3) {
-        if (pt1zx == 0 && pt1zy == 0) {
-            (
-                pt3[PTXX], pt3[PTXY],
-                pt3[PTYX], pt3[PTYY],
-                pt3[PTZX], pt3[PTZY]
-            ) = (
-                pt2xx, pt2xy,
-                pt2yx, pt2yy,
-                pt2zx, pt2zy
-            );
-            return pt3;
-        } else if (pt2zx == 0 && pt2zy == 0) {
-            (
-                pt3[PTXX], pt3[PTXY],
-                pt3[PTYX], pt3[PTYY],
-                pt3[PTZX], pt3[PTZY]
-            ) = (
-                pt1xx, pt1xy,
-                pt1yx, pt1yy,
-                pt1zx, pt1zy
-            );
-            return pt3;
-        }
-        (pt2yx,     pt2yy)     = _FQ2Mul(pt2yx, pt2yy, pt1zx, pt1zy); // U1 = y2 * z1
-        (pt3[PTYX], pt3[PTYY]) = _FQ2Mul(pt1yx, pt1yy, pt2zx, pt2zy); // U2 = y1 * z2
-        (pt2xx,     pt2xy)     = _FQ2Mul(pt2xx, pt2xy, pt1zx, pt1zy); // V1 = x2 * z1
-        (pt3[PTZX], pt3[PTZY]) = _FQ2Mul(pt1xx, pt1xy, pt2zx, pt2zy); // V2 = x1 * z2
-
-        if (pt2xx == pt3[PTZX] && pt2xy == pt3[PTZY]) {
-            if (pt2yx == pt3[PTYX] && pt2yy == pt3[PTYY]) {
-                (
-                    pt3[PTXX], pt3[PTXY],
-                    pt3[PTYX], pt3[PTYY],
-                    pt3[PTZX], pt3[PTZY]
-                ) = _ECTwistDoubleJacobian(pt1xx, pt1xy, pt1yx, pt1yy, pt1zx, pt1zy);
-                return pt3;
-            }
-            (
-                pt3[PTXX], pt3[PTXY],
-                pt3[PTYX], pt3[PTYY],
-                pt3[PTZX], pt3[PTZY]
-            ) = (
-                1, 0,
-                1, 0,
-                0, 0
-            );
-            return pt3;
-        }
-        (pt2zx,     pt2zy)     = _FQ2Mul(pt1zx, pt1zy, pt2zx,     pt2zy);     // W = z1 * z2
-        (pt1xx,     pt1xy)     = _FQ2Sub(pt2yx, pt2yy, pt3[PTYX], pt3[PTYY]); // U = U1 - U2
-        (pt1yx,     pt1yy)     = _FQ2Sub(pt2xx, pt2xy, pt3[PTZX], pt3[PTZY]); // V = V1 - V2
-        (pt1zx,     pt1zy)     = _FQ2Mul(pt1yx, pt1yy, pt1yx,     pt1yy);     // V_squared = V * V
-        (pt2yx,     pt2yy)     = _FQ2Mul(pt1zx, pt1zy, pt3[PTZX], pt3[PTZY]); // V_squared_times_V2 = V_squared * V2
-        (pt1zx,     pt1zy)     = _FQ2Mul(pt1zx, pt1zy, pt1yx,     pt1yy);     // V_cubed = V * V_squared
-        (pt3[PTZX], pt3[PTZY]) = _FQ2Mul(pt1zx, pt1zy, pt2zx,     pt2zy);     // newz = V_cubed * W
-        (pt2xx,     pt2xy)     = _FQ2Mul(pt1xx, pt1xy, pt1xx,     pt1xy);     // U * U
-        (pt2xx,     pt2xy)     = _FQ2Mul(pt2xx, pt2xy, pt2zx,     pt2zy);     // U * U * W
-        (pt2xx,     pt2xy)     = _FQ2Sub(pt2xx, pt2xy, pt1zx,     pt1zy);     // U * U * W - V_cubed
-        (pt2zx,     pt2zy)     = _FQ2Muc(pt2yx, pt2yy, 2);                    // 2 * V_squared_times_V2
-        (pt2xx,     pt2xy)     = _FQ2Sub(pt2xx, pt2xy, pt2zx,     pt2zy);     // A = U * U * W - V_cubed - 2 * V_squared_times_V2
-        (pt3[PTXX], pt3[PTXY]) = _FQ2Mul(pt1yx, pt1yy, pt2xx,     pt2xy);     // newx = V * A
-        (pt1yx,     pt1yy)     = _FQ2Sub(pt2yx, pt2yy, pt2xx,     pt2xy);     // V_squared_times_V2 - A
-        (pt1yx,     pt1yy)     = _FQ2Mul(pt1xx, pt1xy, pt1yx,     pt1yy);     // U * (V_squared_times_V2 - A)
-        (pt1xx,     pt1xy)     = _FQ2Mul(pt1zx, pt1zy, pt3[PTYX], pt3[PTYY]); // V_cubed * U2
-        (pt3[PTYX], pt3[PTYY]) = _FQ2Sub(pt1yx, pt1yy, pt1xx,     pt1xy);     // newy = U * (V_squared_times_V2 - A) - V_cubed * U2
-    }
-    function _ECTwistDoubleJacobian(
-        uint256 pt1xx, uint256 pt1xy,
-        uint256 pt1yx, uint256 pt1yy,
-        uint256 pt1zx, uint256 pt1zy
-    ) internal pure returns (
-        uint256 pt2xx, uint256 pt2xy,
-        uint256 pt2yx, uint256 pt2yy,
-        uint256 pt2zx, uint256 pt2zy
-    ) {
-        (pt2xx, pt2xy) = _FQ2Muc(pt1xx, pt1xy, 3);            // 3 * x
-        (pt2xx, pt2xy) = _FQ2Mul(pt2xx, pt2xy, pt1xx, pt1xy); // W = 3 * x * x
-        (pt1zx, pt1zy) = _FQ2Mul(pt1yx, pt1yy, pt1zx, pt1zy); // S = y * z
-        (pt2yx, pt2yy) = _FQ2Mul(pt1xx, pt1xy, pt1yx, pt1yy); // x * y
-        (pt2yx, pt2yy) = _FQ2Mul(pt2yx, pt2yy, pt1zx, pt1zy); // B = x * y * S
-        (pt1xx, pt1xy) = _FQ2Mul(pt2xx, pt2xy, pt2xx, pt2xy); // W * W
-        (pt2zx, pt2zy) = _FQ2Muc(pt2yx, pt2yy, 8);            // 8 * B
-        (pt1xx, pt1xy) = _FQ2Sub(pt1xx, pt1xy, pt2zx, pt2zy); // H = W * W - 8 * B
-        (pt2zx, pt2zy) = _FQ2Mul(pt1zx, pt1zy, pt1zx, pt1zy); // S_squared = S * S
-        (pt2yx, pt2yy) = _FQ2Muc(pt2yx, pt2yy, 4);            // 4 * B
-        (pt2yx, pt2yy) = _FQ2Sub(pt2yx, pt2yy, pt1xx, pt1xy); // 4 * B - H
-        (pt2yx, pt2yy) = _FQ2Mul(pt2yx, pt2yy, pt2xx, pt2xy); // W * (4 * B - H)
-        (pt2xx, pt2xy) = _FQ2Muc(pt1yx, pt1yy, 8);            // 8 * y
-        (pt2xx, pt2xy) = _FQ2Mul(pt2xx, pt2xy, pt1yx, pt1yy); // 8 * y * y
-        (pt2xx, pt2xy) = _FQ2Mul(pt2xx, pt2xy, pt2zx, pt2zy); // 8 * y * y * S_squared
-        (pt2yx, pt2yy) = _FQ2Sub(pt2yx, pt2yy, pt2xx, pt2xy); // newy = W * (4 * B - H) - 8 * y * y * S_squared
-        (pt2xx, pt2xy) = _FQ2Muc(pt1xx, pt1xy, 2);            // 2 * H
-        (pt2xx, pt2xy) = _FQ2Mul(pt2xx, pt2xy, pt1zx, pt1zy); // newx = 2 * H * S
-        (pt2zx, pt2zy) = _FQ2Mul(pt1zx, pt1zy, pt2zx, pt2zy); // S * S_squared
-        (pt2zx, pt2zy) = _FQ2Muc(pt2zx, pt2zy, 8);            // newz = 8 * S * S_squared
-    }
-    function _ECTwistMulJacobian(
-        uint256 d,
-        uint256 pt1xx, uint256 pt1xy,
-        uint256 pt1yx, uint256 pt1yy,
-        uint256 pt1zx, uint256 pt1zy
-    ) internal pure returns (uint256[6] memory pt2) {
-        while (d != 0) {
-            if ((d & 1) != 0) {
-                pt2 = _ECTwistAddJacobian(
-                    pt2[PTXX], pt2[PTXY],
-                    pt2[PTYX], pt2[PTYY],
-                    pt2[PTZX], pt2[PTZY],
-                    pt1xx, pt1xy,
-                    pt1yx, pt1yy,
-                    pt1zx, pt1zy);
-            }
-            (
-                pt1xx, pt1xy,
-                pt1yx, pt1yy,
-                pt1zx, pt1zy
-            ) = _ECTwistDoubleJacobian(
-                pt1xx, pt1xy,
-                pt1yx, pt1yy,
-                pt1zx, pt1zy
-            );
-
-            d = d / 2;
-        }
-    }
-    // 内部函数：返回 a + b
-    function g2Add(
-        G2Point memory a,
-        G2Point memory b
-    ) internal view returns (G2Point memory) {
-        (uint256 x1, uint256 x0, uint256 y1, uint256 y0) = ECTwistAdd(
-            a.X[1], a.X[0],
-            a.Y[1], a.Y[0],
-            b.X[1], b.X[0],
-            b.Y[1], b.Y[0]
-        );
-
-        return G2Point([x0, x1], [y0, y1]);
-    }
-    // 内部函数：返回 a * b
-    function g2Mul(
-        G2Point memory a,
-        uint256 s
-    ) internal view returns (G2Point memory) {
-        (uint256 x1, uint256 x0, uint256 y1, uint256 y0) = ECTwistMul(
-            s,
-            a.X[1], a.X[0],
-            a.Y[1], a.Y[0]
-        );
-        return G2Point([x0, x1], [y0, y1]);
-    }
-
-    // 内部函数：返回 a^{-1}
-    function g2Neg(
-        G2Point memory a
-    ) internal view returns (G2Point memory) {
-        (uint256 x1, uint256 x0, uint256 y1, uint256 y0) = ECTwistNeg(
-            a.X[1], a.X[0],
-            a.Y[1], a.Y[0]
-        );
-        return G2Point([x0, x1], [y0, y1]);
-    }
-
-    function DLEQVerify(G1Point memory g, G1Point memory y1, G1Point memory a1, 
-                       G1Point memory h, G1Point memory y2, G1Point memory a2, 
+    function DLEQVerify(G1Point memory g1, G1Point memory y1, G1Point memory a1, 
+                       G1Point memory g2, G1Point memory y2, G1Point memory a2, 
+                       G1Point memory g3, G1Point memory y3, G1Point memory a3, 
                        uint256 c, uint256 z) public payable returns (bool)
     {
-        G1Point memory gG = g1mul(g, z);
+        G1Point memory g1G = g1mul(g1, z);
         G1Point memory y1G = g1mul(y1, c);
 
-        G1Point memory hG = g1mul(h, z);
+        G1Point memory g2G = g1mul(g2, z);
         G1Point memory y2G = g1mul(y2, c);
 
-        G1Point memory pt1 =  g1add(gG, y1G);
-        G1Point memory pt2 =  g1add(hG, y2G);
-        if ((a1.X != pt1.X) || (a1.Y != pt1.Y) || (a2.X != pt2.X) || (a2.Y != pt2.Y))
+        G1Point memory g3G = g1mul(g3, z);
+        G1Point memory y3G = g1mul(y3, c);
+
+        G1Point memory pt1 =  g1add(g1G, y1G);
+        G1Point memory pt2 =  g1add(g2G, y2G);
+        G1Point memory pt3 =  g1add(g3G, y3G);
+        if ((a1.X != pt1.X) || (a1.Y != pt1.Y) || (a2.X != pt2.X) || (a2.Y != pt2.Y)|| (a3.X != pt3.X) || (a3.Y != pt3.Y))
         {
             return false;
         }
@@ -554,73 +164,44 @@ contract BC_SID {
         return SID[GetPointKey(pk)];
     }
 
-    mapping(bytes32 => string) public SID;
-    G1Point Generator;
-    G2Point[2] IssuerKey;
-
-    function VerifyPiV(G2Point memory g1,G2Point memory g2, G2Point memory g3, G2Point memory y1, G2Point memory a,
-                       G1Point memory h, G1Point memory y2, G1Point memory b, uint256 challenge, uint256 response1, uint256 response2) public returns (bool)
-    {
-        //check PiV
-        G2Point memory Aw = g2Mul(y1,challenge);
-        Aw=g2Add(Aw, g2Mul(g1, response1));
-        Aw=g2Add(Aw, g2);
-        Aw=g2Add(Aw,g2Neg(g2Mul(g2,challenge)));
-        //uint256(keccak256(abi.encodePacked(claim)))
-        //pk2y=g2Mul(pk2y, m);
-        Aw=g2Add(Aw, g2Mul(g3, response2));
-        G1Point memory Bw;
-        Bw=g1mul(y2, challenge);
-        Bw=g1add(Bw, g1mul(h, response1));
-        if(Aw.X[0]==a.X[0]&&Aw.X[1]==a.X[1]&&Aw.Y[0]==a.Y[0]&&Aw.Y[1]==a.Y[1]&&Bw.X==b.X&&Bw.Y==b.Y)
-        {
-            return true;
-        }
-        return false;
+    // Function to convert a string to uint256 using keccak256 hash
+    function stringToUint256(string memory attribute) public pure returns (uint256) {
+        // 使用 sha256 计算哈希
+        bytes32 hash = sha256(abi.encodePacked(attribute));
+        // 将 bytes32 转换为 uint256 并返回
+        return uint256(hash);
     }
 
+    mapping(bytes32 => string) public SID;
+    G1Point G1;
+    G2Point G2;
+    G1Point[2] IssuerKey;
+
     //Upload issuer's key
-    function UploadAcsParams(G1Point memory g,G2Point memory pkx, G2Point memory pky) public {
-        Generator=g;
-        IssuerKey[0]=pkx;
-        IssuerKey[1]=pky;
+    function UploadACsParams(G1Point memory _g1,G2Point memory _g2,G1Point memory _pkx, G1Point memory _pky) public {
+        G1=_g1;
+        G2=_g2;
+        IssuerKey[0]=_pkx;
+        IssuerKey[1]=_pky;
     }
 
     bool ProofResult=false;
     string BuyerClaim;
-    function VerifyProof1(G1Point memory pk1,G2Point memory pk2, G2Point memory pk2x, G2Point memory pk2y, G2Point memory w, G2Point memory a,
-                       G1Point memory _u, G1Point memory v, G1Point memory b,
-                       uint256 c, uint256 rr,uint256 rm,  G1Point memory _s,
-                       string memory claim) public returns (bool)
-    {
-        //Check u'!=1
-        G1Point memory temp=g1mul(v, 0);
-        if(_u.X!=temp.X&&_u.Y!=temp.Y)
-        {
-            if (VerifyPiV(pk2, pk2x, pk2y, w, a, _u, v, b, c, rr, rm)){
-               //Check pairing
-                if (pairingProd2(g1neg(_u),w,g1add(_s,v),pk2)&&pairingProd2(pk1, IssuerKey[0], g1neg(Generator), pk2x)&&pairingProd2(pk1, IssuerKey[1], g1neg(Generator), pk2y))
-                {
-                    BuyerClaim=claim;
-                    return true;
-                }
-            }
-        }
-    } 
 
-    function VerifyProof2(G1Point memory _c, G1Point memory v, G1Point memory a1, 
-                         G1Point memory pk1,G1Point memory c,G1Point memory a2,
-                         uint256 challenge, uint256 response) public returns (bool) 
+    function VerifyProof(G1Point memory _pk1, G2Point memory _pk2,G2Point memory _u, G2Point memory _s, uint256 _m,string memory _attr) public returns (bool) 
     {
-        if (keccak256(abi.encodePacked(BuyerClaim)) != keccak256(abi.encodePacked(""))){
-            if (DLEQVerify(_c, v, a1, pk1, c, a2, challenge, response)){
-                ProofResult=true;
-                bytes32 key = GetPointKey(pk1);
-                SID[key]=BuyerClaim;
-                return true;
-            }
+        if(isG2Zero(_u)||_m!=stringToUint256(_attr))
+        {
+            return false;
         }
-        return false;
+        if(!pairingProd2(g1neg(G1), _pk2, _pk1, G2)){
+            return false;
+        }
+        if(pairingProd2(g1add(IssuerKey[0], g1mul(IssuerKey[1], _m)), _u, g1neg(_pk1), _s)){
+            ProofResult=true;
+            SID[GetPointKey(_pk1)]=_attr;
+        }
+        return true;
     }
 
     function GetProofResult() public view returns (bool){
@@ -630,6 +211,7 @@ contract BC_SID {
     function getSID(G1Point memory pk) public view returns (string memory) {
         return SID[GetPointKey(pk)];
     }
+
 
     function CheckClaim(G1Point memory pk, string memory attribute) public view returns (bool) {
         bytes32 key = GetPointKey(pk);
@@ -642,12 +224,15 @@ contract BC_SID {
     struct Purchase {
         string productID;
         uint256 quantity;
-        uint256 price;
+        uint256 price;  //gwei
+        string orderID;
         uint256 lockedAmount;
-        G1Point sellerPubKey;
+        //G1Point sellerPubKey;
         G1Point buyerPubKey;
         bool isOngoing;
         bool isLocked;
+        //string code;
+        bool isBuyerConfirm;
     }
 
     mapping(address => mapping(string => uint256)) public productPrices;
@@ -664,19 +249,31 @@ contract BC_SID {
         uint256 quantity,
         uint256 buyerPubKeyX,
         uint256 buyerPubKeyY,
-        uint256 price
+        uint256 totalPrice,
+        string orderID
+        
     );
 
     event SellerAccepted(
     address indexed seller,
     address indexed buyer,
-    uint256 pubKeyX,
-    uint256 pubKeyY);
+    string orderID);
+
+    event SellerGetPayment(
+    address indexed seller,
+    address indexed buyer,
+    string orderID,
+    uint256 payment);
+
 
     //卖家设置商品价格函数
     function setProductPrice(string memory productID, uint256 unitPrice) public {
         require(unitPrice > 0, "Unit price must be greater than zero");
         productPrices[msg.sender][productID] = unitPrice;
+    }
+
+    function GetProduct(address _addr, string memory _productID) public view returns (uint256){
+        return productPrices[_addr][_productID];
     }
 
     //使用block信息和地址hash生成 orderID 
@@ -699,14 +296,14 @@ contract BC_SID {
     function _isZeroPoint(G1Point memory point) internal pure returns (bool) {
         return point.X == 0 && point.Y == 0;
     }
-
+    string buyerOrderID;
     // 买家创建订单，生成唯一orderID，返回给买家
     function buyerCreateOrder(
         address _seller,
         string memory _productID,
         uint256 _quantity,
         G1Point memory _buyerPK
-    ) public payable returns (string memory) {
+    ) public payable {
         require(_quantity > 0, "Quantity must be positive");
         uint256 unitPrice = productPrices[_seller][_productID];
         require(unitPrice > 0, "Product not found");
@@ -714,20 +311,25 @@ contract BC_SID {
         uint256 totalPrice = unitPrice * _quantity;
         require(msg.value == totalPrice, "Incorrect ETH sent");
 
-        string memory orderID = _generateOrderID(msg.sender);
-        Purchase storage existing = orderBook[_seller][msg.sender][orderID];
+        string memory _orderID = _generateOrderID(msg.sender);
+        Purchase storage existing = orderBook[_seller][msg.sender][_orderID];
         require(!existing.isOngoing, "Order already exists");
 
-        orderBook[_seller][msg.sender][orderID] = Purchase({
+        orderBook[_seller][msg.sender][_orderID] = Purchase({
             productID: _productID,
             quantity: _quantity,
             price: totalPrice,
+            orderID: _orderID,
             lockedAmount: msg.value,
-            sellerPubKey: G1Point(0, 0),
+            //sellerPubKey: G1Point(0, 0),
             buyerPubKey: _buyerPK,
-            isOngoing: true,
-            isLocked: true
+            isOngoing: false,
+            isLocked: true,
+            //code:""
+            isBuyerConfirm: false
         });
+
+        buyerOrderID=_orderID;
 
         emit BroadcastPubKey(
             _seller,
@@ -736,25 +338,28 @@ contract BC_SID {
             _quantity,
             _buyerPK.X,
             _buyerPK.Y,
-            totalPrice
+            totalPrice,
+            _orderID
         );
-        return orderID;
+        return;
     }
 
-
+    function GetBuyerOrderID() public view returns (string memory){
+        return buyerOrderID;
+    }
+    
     // 卖家确认订单，需传orderID
     function sellerAcceptOrder(
         address _buyer,
         string memory _orderID,
-        string memory attribute,
-        uint256 _pubKeyX,
-        uint256 _pubKeyY
+        string memory attribute
     ) public {
         Purchase storage order = orderBook[msg.sender][_buyer][_orderID];
-        require(order.isOngoing, "Order not active");
+        //require(order.isOngoing, "Order not active");
         require(order.isLocked, "Funds not locked");
 
         bool checkPassed = CheckClaim(order.buyerPubKey, attribute);
+        //bool checkPassed = true;
         if (!checkPassed) {
             uint256 refundAmount = order.price;
             delete orderBook[msg.sender][_buyer][_orderID];
@@ -762,22 +367,31 @@ contract BC_SID {
             require(success, "Refund failed");
             return;
         }
-        order.sellerPubKey = G1Point(_pubKeyX, _pubKeyY);
+        order.isOngoing = true;
         // orderID字段可保持不变或更新为确认时生成的ID
-        emit SellerAccepted(msg.sender, _buyer, _pubKeyX, _pubKeyY);
+        emit SellerAccepted(msg.sender, _buyer, _orderID);
     }
 
     //买家确认交易成功（如收到商品）
     event OrderCompleted(address indexed buyer, address indexed seller, uint256 amount);
+    function GetConfirmResult(address _sellerAddr, address _buyerAddr, string memory _orderID) public view returns (bool){
+        return orderBook[_sellerAddr][_buyerAddr][_orderID].isBuyerConfirm;
+    }
+
     function buyerConfirmWithCode(
         address _seller,
         string memory _orderID,
         string memory verificationCode
     ) public {
         Purchase storage order = orderBook[_seller][msg.sender][_orderID];
+        
         require(order.isOngoing, "Order not active");
         require(order.isLocked, "Funds not locked");
-        // require(verifyCode(verificationCode), "Invalid code");
+        //require(VerifyCode(verificationCode,_orderID), "Invalid code");
+        if (VerifyCode(verificationCode,_orderID)){
+            order.isBuyerConfirm=true;
+            return;
+        }
 
         uint256 amount = order.price;
         delete orderBook[_seller][msg.sender][_orderID];
@@ -786,13 +400,27 @@ contract BC_SID {
         emit OrderCompleted(msg.sender, _seller, amount);
     }
 
+
+
     //卖家提现余额
-    function withdrawPayment() public {
+    function withdrawPayment(address _buyerAddr, string memory _orderID) public {   
         uint256 balance = balances[msg.sender];
         require(balance > 0, "No funds to withdraw");
         balances[msg.sender] = 0;
+
         (bool success, ) = payable(msg.sender).call{value: balance}("");
         require(success, "Transfer failed.");
+
+        emit SellerGetPayment(
+            msg.sender,
+            _buyerAddr,
+            _orderID,
+            balance
+        );
+    }
+
+    function getBalanceOf(address seller) public view returns (uint256) {
+        return balances[seller];
     }
 
 
@@ -800,7 +428,7 @@ contract BC_SID {
     function buyerCancelOrder(address _seller, string memory _orderID) public {
         Purchase storage order = orderBook[_seller][msg.sender][_orderID];
         require(order.isOngoing, "Order not active");
-        require(_isZeroPoint(order.sellerPubKey), "Order already confirmed, cannot cancel by buyer");
+        //require(_isZeroPoint(order.sellerPubKey), "Order already confirmed, cannot cancel by buyer");
 
         uint256 refundAmount = order.lockedAmount;
         delete orderBook[_seller][msg.sender][_orderID];
@@ -813,7 +441,7 @@ contract BC_SID {
     function sellerCancelOrder(address _buyer, string memory _orderID) public {
         Purchase storage order = orderBook[msg.sender][_buyer][_orderID];
         require(order.isOngoing, "Order not active");
-        require(!_isZeroPoint(order.sellerPubKey), "Order not confirmed yet, seller cannot cancel");
+        //require(!_isZeroPoint(order.sellerPubKey), "Order not confirmed yet, seller cannot cancel");
 
         uint256 refundAmount = order.lockedAmount;
         delete orderBook[msg.sender][_buyer][_orderID];
@@ -822,7 +450,84 @@ contract BC_SID {
         require(success, "Refund failed");
     }
 
+//=========================================Logistics Order===================================//
+struct Logistics {
+    G1Point buyerPubKey;
+    bool isOngoing;
+    string currentSite;
+    uint256 code;
+    G1Point SN;
+    //string tranRoute;
+    //string addrCT;
+}
 
+mapping(string => Logistics) public orderLogistics;
 
+    // 创建物流订单
+    function CreateLogisticsOrder(
+        address _sellerAddr,
+        address _buyerAddr,
+        string memory _orderID,
+        //string memory _tranRoute,
+        //string memory _addrCT,
+        uint256 _code,           // 原 string _code 改为 uint256，保持类型一致
+        G1Point memory _SN       // 保留 G1Point 类型
+    ) public payable {
+        Logistics storage existing = orderLogistics[_orderID];
+        require(!existing.isOngoing, "Logistics order already exists");
+
+        Purchase memory orderMessage = orderBook[_sellerAddr][_buyerAddr][_orderID];
+
+        orderLogistics[_orderID] = Logistics({
+            buyerPubKey: orderMessage.buyerPubKey,
+            isOngoing: true,
+            currentSite: "",
+            code: _code,
+            SN: _SN
+            //StranRoute: _tranRoute,
+            //addrCT: _addrCT
+        });
+    }
+
+    // 更新物流状态
+    function UpdateStatus(string memory _orderID, string memory _siteID) public {
+        Logistics storage order = orderLogistics[_orderID];
+        require(order.isOngoing, "Order not active");
+        order.currentSite = _siteID;
+    }
+
+    // 查询当前位置
+    function GetCurrentSite(string memory _orderID) public view returns (string memory) {
+        return orderLogistics[_orderID].currentSite;
+    }
+
+    function GetSN(string memory _orderID) public view returns (G1Point memory) {
+        return orderLogistics[_orderID].SN;
+    }
+
+    // 验证提货码
+    function VerifyCode(string memory _orderID, string memory _code) public view returns (bool) {
+        string memory temp = string(abi.encodePacked(_code,"||", _orderID));
+        uint256 hashed = stringToUint256(temp);
+        return hashed == orderLogistics[_orderID].code;
+    }
+
+    function getOrder(address _seller, address _buyer, string memory _orderID) public view returns (
+        string memory productID,
+        string memory orderID,
+        uint256 quantity,
+        uint256 price,
+        bool isOngoing,
+        bool isLocked) {
+            Purchase storage order = orderBook[_seller][_buyer][_orderID];
+            return (
+                order.productID,
+                order.orderID,
+                order.quantity,
+                order.price,
+                order.isOngoing,
+                order.isLocked
+            );
+    }
 
 }

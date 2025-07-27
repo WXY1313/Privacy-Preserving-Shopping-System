@@ -1,9 +1,7 @@
 package main
 
 import (
-	bn256 "Obfushop/bn256"
 	"Obfushop/crypto/AC"
-	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"math/big"
@@ -12,16 +10,16 @@ import (
 func main() {
 	paramters := AC.Setup()
 	issuerkey := AC.KeyGen(paramters)
-	sk, _ := rand.Int(rand.Reader, bn256.Order)
-	pk1 := new(bn256.G1).ScalarBaseMult(sk)
-	pk2 := new(bn256.G2).ScalarBaseMult(sk)
+	//sk, _ := rand.Int(rand.Reader, bn256.Order)
+	//pk1 := new(bn256.G1).ScalarBaseMult(sk)
+	//pk2 := new(bn256.G2).ScalarBaseMult(sk)
 	attribute := "Adult"
 	hash := sha256.Sum256([]byte(attribute))
 	m := new(big.Int).SetBytes(hash[:])
 	d, req := AC.PrepareBlindSign(paramters, m)
 	signature := AC.BlindSign(paramters, issuerkey, req)
 	cred := AC.ObtainCred(signature, d)
-	proof, _ := AC.ProveCred(pk1, paramters, sk, issuerkey, cred, m)
-	result, _ := AC.VerifyCred(paramters, pk1, pk2, issuerkey, proof)
+	proof, _ := AC.ProveCred(paramters, issuerkey, cred, m)
+	result, _ := AC.VerifyCred(paramters, issuerkey, proof)
 	fmt.Printf("The verify result is %v\n", result)
 }

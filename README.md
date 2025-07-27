@@ -35,7 +35,7 @@ Version: 0.8.25-develop
 1. Generate private keys to generate the `.env` file in different Linux os or Mac os
 
     ```bash(Linux os)
-    bash genPrvKey.sh
+    bash genPrvKey_Linux.sh
     ```
 
 2. start ganache

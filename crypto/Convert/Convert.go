@@ -4,6 +4,7 @@ import (
 	"Obfushop/compile/contract"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"math/big"
 
 	//"errors"
@@ -118,6 +119,23 @@ func GTToString(gt *bn256.GT) string {
 	// 使用 Base64 编码为字符串
 	encoded := base64.StdEncoding.EncodeToString(gtBytes)
 	return encoded
+}
+
+// StringToGT 解码 Base64 字符串并反序列化为 bn256.GT 元素
+func StringToGT(encoded string) *bn256.GT {
+	gtBytes, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		fmt.Println("❌ Base64 decode failed:", err)
+		return nil
+	}
+
+	gt := new(bn256.GT)
+	if _, err := gt.Unmarshal(gtBytes); err != nil {
+		fmt.Println("❌ GT unmarshal failed:", err)
+		return nil
+	}
+
+	return gt
 }
 
 // StringToG1 从 Base64 字符串解码还原 bn256.G1 元素

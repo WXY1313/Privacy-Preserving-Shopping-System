@@ -1,23 +1,23 @@
 package main
 
 import (
-	bn256 "Obfushop/bn256"
+	"Obfushop/bn256"
 	"Obfushop/compile/contract"
+	"Obfushop/compile/contract/Event"
 	"Obfushop/crypto/AC"
+	"Obfushop/crypto/AES"
 	"Obfushop/crypto/Convert"
+	"Obfushop/crypto/OABE"
 	"Obfushop/utils"
 	"context"
-	"fmt"
-	"log"
-
-	//"Obfushop/crypto/Convert"
-
 	"crypto/rand"
 	"crypto/sha256"
-
-	//"fmt"
+	"fmt"
+	"log"
 	"math/big"
+	"strings"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -32,6 +32,9 @@ func main() {
 	}
 
 	privatekey := utils.GetENV("PRIVATE_KEY_1")
+	privatekeyBuyer := utils.GetENV("PRIVATE_KEY_2")
+	privatekeySeller := utils.GetENV("PRIVATE_KEY_3")
+	privatekeyLogistics := utils.GetENV("PRIVATE_KEY_4")
 
 	auth := utils.Transact(client, privatekey, big.NewInt(0))
 
@@ -52,7 +55,7 @@ func main() {
 	paramters := AC.Setup()           //Generate ACs parameters
 	issuerkey := AC.KeyGen(paramters) //Generate issuer's key pair
 	auth0 := utils.Transact(client, privatekey, big.NewInt(0))
-	tx0, _ := Contract.UploadAcsParams(auth0, Convert.G1ToG1Point(paramters.G1), Convert.G2ToG2Point(issuerkey.PK1), Convert.G2ToG2Point(issuerkey.PK2))
+	tx0, _ := Contract.UploadACsParams(auth0, Convert.G1ToG1Point(paramters.G1), Convert.G2ToG2Point(paramters.G2), Convert.G1ToG1Point(issuerkey.PK1), Convert.G1ToG1Point(issuerkey.PK2))
 	receipt0, err := bind.WaitMined(context.Background(), client, tx0)
 	if err != nil {
 		log.Fatalf("Tx receipt failed: %v", err)
@@ -66,40 +69,222 @@ func main() {
 	pkB2 := new(bn256.G2).ScalarBaseMult(skB)
 
 	//2.User obtains his credential
-	attribute := "age>18"
-	hash := sha256.Sum256([]byte(attribute + skB.String()))
+	attribute := "Adult"
+	hash := sha256.Sum256([]byte(attribute))
 	m := new(big.Int).SetBytes(hash[:])
+	fmt.Printf("attribute:%v\n Corresponding value:%v\n", attribute, m)
 	d, req := AC.PrepareBlindSign(paramters, m)
 	signature := AC.BlindSign(paramters, issuerkey, req)
-	Cred := AC.ObtainCred(signature, d)
+	cred := AC.ObtainCred(signature, d)
 
 	//3. Generate proof of credential
-	proof, _ := AC.ProveCred(pkB1, paramters, skB, issuerkey, Cred, m)
+	proof, _ := AC.ProveCred(paramters, skB, issuerkey, cred, m)
+
+	//4.off-chain verify
+	OffResult, _ := AC.VerifyCred(paramters, pkB1, pkB2, issuerkey, proof)
+	fmt.Printf("Off-chain verification result:%v\n", OffResult)
 
 	//4.Construct digtal shopping identity and uploads the shopping-chain
-	auth1 := utils.Transact(client, privatekey, big.NewInt(0))
-	tx1, _ := Contract.VerifyProof1(auth1, Convert.G1ToG1Point(pkB1), Convert.G2ToG2Point(pkB2), Convert.G2ToG2Point(new(bn256.G2).ScalarMult(issuerkey.PK1, skB)), Convert.G2ToG2Point(new(bn256.G2).ScalarMult(issuerkey.PK2, skB)), Convert.G2ToG2Point(proof.W), Convert.G2ToG2Point(proof.PiV.RG),
-		Convert.G1ToG1Point(proof.U), Convert.G1ToG1Point(proof.V), Convert.G1ToG1Point(proof.PiV.RH),
-		proof.PiV.C, proof.PiV.Rr, proof.PiV.Rm, Convert.G1ToG1Point(proof.S), attribute)
+	auth1 := utils.Transact(client, privatekeyBuyer, big.NewInt(0))
+	tx1, _ := Contract.VerifyProof(auth1, Convert.G1ToG1Point(pkB1), Convert.G2ToG2Point(pkB2), Convert.G2ToG2Point(proof.U), Convert.G2ToG2Point(proof.S), proof.Value, attribute)
 	receipt1, err := bind.WaitMined(context.Background(), client, tx1)
 	if err != nil {
 		log.Fatalf("Tx receipt failed: %v", err)
 	}
-	fmt.Printf("Verify1Proof Gas used: %d\n", receipt1.GasUsed)
-	auth2 := utils.Transact(client, privatekey, big.NewInt(0))
-	tx2, _ := Contract.VerifyProof2(auth2, Convert.G1ToG1Point(proof.C_), Convert.G1ToG1Point(proof.V), Convert.G1ToG1Point(proof.Pi_R.RG),
-		Convert.G1ToG1Point(pkB1), Convert.G1ToG1Point(proof.C), Convert.G1ToG1Point(proof.Pi_R.RH), proof.Pi_R.C, proof.Pi_R.Z)
-	receipt2, err := bind.WaitMined(context.Background(), client, tx2)
-	if err != nil {
-		log.Fatalf("Tx receipt failed: %v", err)
-	}
-	fmt.Printf("Verify2Proof Gas used: %d\n", receipt2.GasUsed)
-	fmt.Printf("Total VerifyProof Gas used: %d\n", receipt1.GasUsed+receipt2.GasUsed)
+	fmt.Printf("VerifyProof Gas used: %d\n", receipt1.GasUsed)
 	ProofResult, _ := Contract.GetProofResult(&bind.CallOpts{})
 	fmt.Printf("The proof verification:%v\n", ProofResult)
 	SIDAttr, _ := Contract.GetSID(&bind.CallOpts{}, Convert.G1ToG1Point(pkB1))
 	fmt.Printf("The SID attribute:%v\n", SIDAttr)
 
-	//
+	balance, err := client.BalanceAt(context.Background(), auth1.From, nil) // nil表示最新块
+	if err != nil {
+		log.Fatalf("Failed to get balance: %v", err)
+	}
+	fmt.Printf("Buyer余额: %s wei\n", balance.String())
+
+	//====================================Shopping=====================================//
+	//1.Merchant sets productID and its price.
+	productID := "Wine123"
+	auth2 := utils.Transact(client, privatekeySeller, big.NewInt(0))
+	tx2, _ := Contract.SetProductPrice(auth2, productID, big.NewInt(123347328473432382))
+	receipt2, err := bind.WaitMined(context.Background(), client, tx2)
+	if err != nil {
+		log.Fatalf("Tx receipt failed: %v", err)
+	}
+	fmt.Printf("Merchant set the  product Gas used: %d\n", receipt2.GasUsed)
+
+	//2. Buyer Obtain product price;
+	sellerAddr := auth2.From
+	price, err := Contract.GetProduct(&bind.CallOpts{}, sellerAddr, productID)
+	if err != nil {
+		log.Fatalf("GetProduct 调用失败: %v", err)
+	}
+	fmt.Printf("商品 %s 的价格为: %s gwei\n", productID, price.String())
+
+	//3.Buyer sends a shopping order
+	totalPrice := new(big.Int).Mul(price, big.NewInt(3))         // 单价 * 数量 = 总价 （单位：gWei）
+	auth3 := utils.Transact(client, privatekeyBuyer, totalPrice) // ⬅️ 发送 totalPrice wei
+	tx3, _ := Contract.BuyerCreateOrder(auth3, sellerAddr, productID, big.NewInt(3), Convert.G1ToG1Point(pkB1))
+	receipt3, err := bind.WaitMined(context.Background(), client, tx3)
+	if err != nil {
+		log.Fatalf("Transaction mining failed: %v", err)
+	}
+	fmt.Printf("BuyerCreateOrder GasUsed = %d\n", receipt3.GasUsed)
+	buyerAddr := auth3.From
+	balance, err = client.BalanceAt(context.Background(), auth3.From, nil) // nil表示最新块
+	if err != nil {
+		log.Fatalf("Failed to get balance: %v", err)
+	}
+	fmt.Printf("Buyer余额: %s wei\n", balance.String())
+	buyerOrderID, _ := Contract.GetBuyerOrderID(&bind.CallOpts{})
+	isOrder, _ := Contract.GetOrder(&bind.CallOpts{}, sellerAddr, buyerAddr, buyerOrderID)
+
+	if err != nil {
+		log.Fatalf("❌ 获取订单失败: %v", err)
+	}
+	fmt.Println("✅ 链上订单状态:")
+	fmt.Printf("- ProductID     = %s\n", isOrder.ProductID)
+	fmt.Printf("- Quantity      = %v\n", isOrder.Quantity)
+	fmt.Printf("- Price         = %v\n", isOrder.Price)
+	//fmt.Printf("- LockedAmount  = %v\n", isOrder.LockedAmount)
+	fmt.Printf("- IsOngoing     = %v\n", isOrder.IsOngoing)
+	fmt.Printf("- IsLocked      = %v\n", isOrder.IsLocked)
+
+	//3.Merchant comfirm a shopping order.
+	//  `Merchant obtains a transaction`
+	parsedABI, _ := abi.JSON(strings.NewReader(contract.ContractABI))
+	header, _ := client.HeaderByNumber(context.Background(), nil)
+	order, _ := Event.PollEventsBySeller(client, common.HexToAddress(address.Hex()), parsedABI, sellerAddr, header.Number.Uint64()-50) // 可监听最近50个区块
+	//`Merchant comfirm the order`
+	auth4 := utils.Transact(client, privatekeySeller, big.NewInt(0)) // ⬅️ 发送 totalPrice wei
+	tx4, _ := Contract.SellerAcceptOrder(auth4, order[0].Buyer, order[0].OrderID, attribute)
+	receipt4, err := bind.WaitMined(context.Background(), client, tx4)
+	if err != nil {
+		log.Fatalf("Transaction mining failed: %v", err)
+	}
+	fmt.Printf("SellerAcceptOrder GasUsed = %d\n", receipt4.GasUsed)
+
+	isOrder, _ = Contract.GetOrder(&bind.CallOpts{}, sellerAddr, buyerAddr, buyerOrderID)
+
+	if err != nil {
+		log.Fatalf("❌ 获取订单失败: %v", err)
+	}
+	fmt.Println("✅ 链上订单状态:")
+	fmt.Printf("- ProductID     = %s\n", isOrder.ProductID)
+	fmt.Printf("- Quantity      = %v\n", isOrder.Quantity)
+	fmt.Printf("- Price         = %v\n", isOrder.Price)
+	//fmt.Printf("- LockedAmount  = %v\n", isOrder.LockedAmount)
+	fmt.Printf("- IsOngoing     = %v\n", isOrder.IsOngoing)
+	fmt.Printf("- IsLocked      = %v\n", isOrder.IsLocked)
+
+	//======================================Logistics=========================================//
+	// 系统参数生成
+	MSK, PK := OABE.Setup()
+	//生成用户公私钥对
+	sku, _ := rand.Int(rand.Reader, bn256.Order)
+	pku := new(bn256.G1).ScalarMult(PK.G1, sku)
+
+	//1.Buyer encrypts our delivery address
+	//TransAddr := "A4 Estate||A3 Road||A2 County||A1 City||A province "
+	DelivAddr := []byte("5st Villa")
+	keyR, _ := rand.Int(rand.Reader, bn256.Order)
+	keyAES := new(bn256.GT).ScalarBaseMult(keyR)
+	cipherAddr, err := AES.EncryptAndEncode(DelivAddr, keyAES.Marshal())
+	if err != nil {
+		log.Fatalf("加密失败: %v", err)
+	}
+	fmt.Println("加密后的Base64字符串:", cipherAddr)
+	//加密派件地址
+	tau := "(Owner  OR (Community_A AND Hovering_drone))"
+	ABECT, xsMap := OABE.Encrypt(keyAES, tau, PK)
+
+	//2.Logistics company generate a logistics order
+	N, _ := rand.Int(rand.Reader, bn256.Order)
+	code := Convert.StringToBigInt(order[0].OrderID + "||" + string(new(bn256.G1).ScalarBaseMult(N).Marshal()))
+	SN := new(bn256.G1).ScalarMult(pkB1, N)
+
+	auth5 := utils.Transact(client, privatekeyLogistics, big.NewInt(0)) // ⬅️ 发送 totalPrice wei
+	tx5, _ := Contract.CreateLogisticsOrder(auth5, sellerAddr, buyerAddr, order[0].OrderID, code, Convert.G1ToG1Point(SN))
+	receipt5, err := bind.WaitMined(context.Background(), client, tx5)
+	if err != nil {
+		log.Fatalf("Transaction mining failed: %v", err)
+	}
+	fmt.Printf("CreateLogisticsOrder GasUsed = %d\n", receipt5.GasUsed)
+
+	// 3.Logistics site updates status
+	auth6 := utils.Transact(client, privatekeyLogistics, big.NewInt(0)) // ⬅️ 发送 totalPrice wei
+	tx6, _ := Contract.UpdateStatus(auth6, order[0].OrderID, "A3 Road")
+	receipt6, err := bind.WaitMined(context.Background(), client, tx6)
+	if err != nil {
+		log.Fatalf("Transaction mining failed: %v", err)
+	}
+	fmt.Printf("UpdateStatus GasUsed = %d\n", receipt6.GasUsed)
+	//4.Drone obtains own attribute key
+	Su := map[string]bool{"Community_A": true, "Hovering_drone": true}
+	var attributeSet []string
+	for key, _ := range Su {
+		attributeSet = append(attributeSet, key)
+	}
+	SK := OABE.KeyGen(pku, MSK, PK, attributeSet)
+	//外包解密
+	IR := OABE.ODecrypt(Su, ABECT, SK, xsMap, PK)
+	//无人机解密
+	_keyAES := OABE.Decrypt(IR, sku, ABECT)
+
+	_DelivAddr, err := AES.DecodeAndDecrypt(cipherAddr, _keyAES.Marshal())
+	if err != nil {
+		fmt.Println("解密失败:", err)
+	}
+	fmt.Printf("派件地址为: %s\n", string(_DelivAddr))
+	//=======================================Confirm========================================//
+	//1.Buyer obtains pickup code
+	_SN, _ := Contract.GetSN(&bind.CallOpts{}, order[0].OrderID)
+	fmt.Printf("加密随机数为：%v\n", _SN)
+	_N := new(bn256.G1).ScalarMult(Convert.G1PointToG1(_SN), skB.ModInverse(skB, bn256.Order))
+
+	//2.Buyer confirm receipt
+	auth7 := utils.Transact(client, privatekeyBuyer, big.NewInt(0)) // ⬅️ 发送 totalPrice wei
+	tx7, _ := Contract.BuyerConfirmWithCode(auth7, sellerAddr, order[0].OrderID, string(_N.Marshal()))
+	receipt7, err := bind.WaitMined(context.Background(), client, tx7)
+	if err != nil {
+		log.Fatalf("Transaction mining failed: %v", err)
+	}
+	fmt.Printf("BuyerConfirmWithCode GasUsed = %d\n", receipt7.GasUsed)
+	sellerBalance, _ := Contract.GetBalanceOf(&bind.CallOpts{}, sellerAddr)
+	fmt.Printf("Seller balance:%v\n", sellerBalance)
+	confiirmResult, _ := Contract.GetConfirmResult(&bind.CallOpts{}, sellerAddr, buyerAddr, order[0].OrderID)
+	fmt.Printf("Confirm result:%v\n", confiirmResult)
+	//3.Seller withdraw the payment
+	auth8 := utils.Transact(client, privatekeySeller, big.NewInt(0)) // ⬅️ 发送 totalPrice wei
+	tx8, _ := Contract.WithdrawPayment(auth8, buyerAddr, order[0].OrderID)
+	receipt8, err := bind.WaitMined(context.Background(), client, tx8)
+
+	if receipt8.Status != 1 {
+		log.Fatalf("❌ 提现交易失败，链上回滚")
+	}
+	if err != nil {
+		log.Fatalf("Transaction mining failed: %v", err)
+	}
+	fmt.Printf("WithdrawPayment GasUsed = %d\n", receipt8.GasUsed)
+
+	parsedABI1, err := abi.JSON(strings.NewReader(contract.ContractABI))
+	if err != nil {
+		log.Fatalf("❌ ABI 解析失败: %v", err)
+	}
+
+	events, err := Event.GetPaymentEventsByOrderID(client, common.HexToAddress(address.Hex()), parsedABI1, order[0].OrderID)
+	if err != nil {
+		log.Fatalf("❌ 事件监听失败: %v", err)
+	}
+
+	if len(events) == 0 {
+		fmt.Println("⚠️ 未监听到提现事件（SellerGetPayment），可能提现未成功或 orderID 不匹配")
+	} else {
+		for _, ev := range events {
+			fmt.Printf("✅ 提现成功：订单 %v，卖家 %v，买家 %v，金额 %v wei\n",
+				ev.OrderID, ev.Seller.Hex(), ev.Buyer.Hex(), ev.Payment.String())
+		}
+	}
 
 }
