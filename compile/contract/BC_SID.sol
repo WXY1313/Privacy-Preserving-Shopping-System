@@ -185,10 +185,7 @@ contract BC_SID {
         IssuerKey[1]=_pky;
     }
 
-    bool ProofResult=false;
-    string BuyerClaim;
-
-    function VerifyProof(G1Point memory _pk1, G2Point memory _pk2,G2Point memory _u, G2Point memory _s, uint256 _m,string memory _attr) public returns (bool) 
+    function RegisterSID(G1Point memory _pk1, G2Point memory _pk2,G2Point memory _u, G2Point memory _s, uint256 _m,string memory _attr) public returns (bool) 
     {
         if(isG2Zero(_u)||_m!=stringToUint256(_attr))
         {
@@ -198,20 +195,14 @@ contract BC_SID {
             return false;
         }
         if(pairingProd2(g1add(IssuerKey[0], g1mul(IssuerKey[1], _m)), _u, g1neg(_pk1), _s)){
-            ProofResult=true;
             SID[GetPointKey(_pk1)]=_attr;
         }
         return true;
     }
 
-    function GetProofResult() public view returns (bool){
-        return ProofResult;
-    }
-
     function getSID(G1Point memory pk) public view returns (string memory) {
         return SID[GetPointKey(pk)];
     }
-
 
     function CheckClaim(G1Point memory pk, string memory attribute) public view returns (bool) {
         bytes32 key = GetPointKey(pk);
@@ -227,11 +218,9 @@ contract BC_SID {
         uint256 price;  //gwei
         string orderID;
         uint256 lockedAmount;
-        //G1Point sellerPubKey;
         G1Point buyerPubKey;
         bool isOngoing;
         bool isLocked;
-        //string code;
         bool isBuyerConfirm;
     }
 
@@ -250,9 +239,7 @@ contract BC_SID {
         uint256 buyerPubKeyX,
         uint256 buyerPubKeyY,
         uint256 totalPrice,
-        string orderID
-        
-    );
+        string orderID);
 
     event SellerAccepted(
     address indexed seller,
@@ -265,13 +252,12 @@ contract BC_SID {
     string orderID,
     uint256 payment);
 
-
     //卖家设置商品价格函数
     function setProductPrice(string memory productID, uint256 unitPrice) public {
         require(unitPrice > 0, "Unit price must be greater than zero");
         productPrices[msg.sender][productID] = unitPrice;
     }
-
+    //买家获得商品价格
     function GetProduct(address _addr, string memory _productID) public view returns (uint256){
         return productPrices[_addr][_productID];
     }
@@ -292,18 +278,13 @@ contract BC_SID {
         return string(str);
     }
 
-    // 判断G1Point是否为零点（默认）
-    function _isZeroPoint(G1Point memory point) internal pure returns (bool) {
-        return point.X == 0 && point.Y == 0;
-    }
-    string buyerOrderID;
     // 买家创建订单，生成唯一orderID，返回给买家
     function buyerCreateOrder(
         address _seller,
         string memory _productID,
         uint256 _quantity,
-        G1Point memory _buyerPK
-    ) public payable {
+        G1Point memory _buyerPK) public payable returns (string memory)
+    {
         require(_quantity > 0, "Quantity must be positive");
         uint256 unitPrice = productPrices[_seller][_productID];
         require(unitPrice > 0, "Product not found");
@@ -321,15 +302,11 @@ contract BC_SID {
             price: totalPrice,
             orderID: _orderID,
             lockedAmount: msg.value,
-            //sellerPubKey: G1Point(0, 0),
             buyerPubKey: _buyerPK,
             isOngoing: false,
             isLocked: true,
-            //code:""
             isBuyerConfirm: false
         });
-
-        buyerOrderID=_orderID;
 
         emit BroadcastPubKey(
             _seller,
@@ -341,11 +318,7 @@ contract BC_SID {
             totalPrice,
             _orderID
         );
-        return;
-    }
-
-    function GetBuyerOrderID() public view returns (string memory){
-        return buyerOrderID;
+        return _orderID;
     }
     
     // 卖家确认订单，需传orderID
@@ -355,11 +328,9 @@ contract BC_SID {
         string memory attribute
     ) public {
         Purchase storage order = orderBook[msg.sender][_buyer][_orderID];
-        //require(order.isOngoing, "Order not active");
         require(order.isLocked, "Funds not locked");
 
         bool checkPassed = CheckClaim(order.buyerPubKey, attribute);
-        //bool checkPassed = true;
         if (!checkPassed) {
             uint256 refundAmount = order.price;
             delete orderBook[msg.sender][_buyer][_orderID];
@@ -387,11 +358,11 @@ contract BC_SID {
         
         require(order.isOngoing, "Order not active");
         require(order.isLocked, "Funds not locked");
-        //require(VerifyCode(verificationCode,_orderID), "Invalid code");
-        if (VerifyCode(verificationCode,_orderID)){
+        //equire(VerifyCode(_orderID,verificationCode), "Invalid code");
+        if (VerifyCode(_orderID,verificationCode)){
             order.isBuyerConfirm=true;
-            return;
         }
+            
 
         uint256 amount = order.price;
         delete orderBook[_seller][msg.sender][_orderID];
@@ -400,10 +371,8 @@ contract BC_SID {
         emit OrderCompleted(msg.sender, _seller, amount);
     }
 
-
-
     //卖家提现余额
-    function withdrawPayment(address _buyerAddr, string memory _orderID) public {   
+    function withdrawPayment(address _buyerAddr, string memory _orderID) public payable {   
         uint256 balance = balances[msg.sender];
         require(balance > 0, "No funds to withdraw");
         balances[msg.sender] = 0;
@@ -423,12 +392,10 @@ contract BC_SID {
         return balances[seller];
     }
 
-
     // 买家取消订单，前提订单未被确认（sellerPubKey == 0）
     function buyerCancelOrder(address _seller, string memory _orderID) public {
         Purchase storage order = orderBook[_seller][msg.sender][_orderID];
         require(order.isOngoing, "Order not active");
-        //require(_isZeroPoint(order.sellerPubKey), "Order already confirmed, cannot cancel by buyer");
 
         uint256 refundAmount = order.lockedAmount;
         delete orderBook[_seller][msg.sender][_orderID];
@@ -441,7 +408,6 @@ contract BC_SID {
     function sellerCancelOrder(address _buyer, string memory _orderID) public {
         Purchase storage order = orderBook[msg.sender][_buyer][_orderID];
         require(order.isOngoing, "Order not active");
-        //require(!_isZeroPoint(order.sellerPubKey), "Order not confirmed yet, seller cannot cancel");
 
         uint256 refundAmount = order.lockedAmount;
         delete orderBook[msg.sender][_buyer][_orderID];
@@ -451,25 +417,21 @@ contract BC_SID {
     }
 
 //=========================================Logistics Order===================================//
-struct Logistics {
-    G1Point buyerPubKey;
-    bool isOngoing;
-    string currentSite;
-    uint256 code;
-    G1Point SN;
-    //string tranRoute;
-    //string addrCT;
-}
+    struct Logistics {
+        G1Point buyerPubKey;
+        bool isOngoing;
+        string currentSite;
+        uint256 code;
+        G1Point SN;
+    }
 
-mapping(string => Logistics) public orderLogistics;
+    mapping(string => Logistics) public orderLogistics;
 
     // 创建物流订单
     function CreateLogisticsOrder(
         address _sellerAddr,
         address _buyerAddr,
         string memory _orderID,
-        //string memory _tranRoute,
-        //string memory _addrCT,
         uint256 _code,           // 原 string _code 改为 uint256，保持类型一致
         G1Point memory _SN       // 保留 G1Point 类型
     ) public payable {
@@ -484,8 +446,6 @@ mapping(string => Logistics) public orderLogistics;
             currentSite: "",
             code: _code,
             SN: _SN
-            //StranRoute: _tranRoute,
-            //addrCT: _addrCT
         });
     }
 
@@ -518,7 +478,8 @@ mapping(string => Logistics) public orderLogistics;
         uint256 quantity,
         uint256 price,
         bool isOngoing,
-        bool isLocked) {
+        bool isLocked,
+        bool isBuyerConfirm) {
             Purchase storage order = orderBook[_seller][_buyer][_orderID];
             return (
                 order.productID,
@@ -526,7 +487,8 @@ mapping(string => Logistics) public orderLogistics;
                 order.quantity,
                 order.price,
                 order.isOngoing,
-                order.isLocked
+                order.isLocked,
+                order.isBuyerConfirm
             );
     }
 

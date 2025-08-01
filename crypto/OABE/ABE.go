@@ -21,7 +21,7 @@ type AttributeKey struct {
 type Ciphertext struct {
 	Policy    *PolicyNode
 	C         *bn256.GT
-	_C        *bn256.G2
+	CC        *bn256.G2
 	NodeValue map[string]map[*big.Int]map[*bn256.G1]*bn256.G2
 }
 
@@ -65,7 +65,7 @@ func KeyGen(PKu *bn256.G1, MSK *big.Int, PK *Params, Su []string) *AttributeKey 
 	}
 }
 
-func Encrypt(m *bn256.GT, tau string, PK *Params) (*Ciphertext, xsMapType) {
+func Encrypt(m *bn256.GT, tau string, PK *Params) (*Ciphertext, xsMapType, *bn256.GT, *big.Int) {
 	s, _ := rand.Int(rand.Reader, bn256.Order)
 	c := new(bn256.GT).Add(m, new(bn256.GT).ScalarMult(PK.GT, s))
 	_c := new(bn256.G2).ScalarMult(PK.G2, s)
@@ -107,9 +107,9 @@ func Encrypt(m *bn256.GT, tau string, PK *Params) (*Ciphertext, xsMapType) {
 	return &Ciphertext{
 		Policy:    policy,
 		C:         c,
-		_C:        _c,
+		CC:        _c,
 		NodeValue: nodeValue,
-	}, xsMap
+	}, xsMap, new(bn256.GT).ScalarMult(PK.GT, s), s
 }
 
 func ODecrypt(attributeSet map[string]bool, CT *Ciphertext, SK *AttributeKey, xsMap xsMapType, PK *Params) *bn256.GT {
@@ -168,12 +168,52 @@ func ODecrypt(attributeSet map[string]bool, CT *Ciphertext, SK *AttributeKey, xs
 		}
 	}
 	temp := RecoverSecret(usedShares, coeffs, FieldOrder)
-	recovered := new(bn256.GT).Add(bn256.Pair(SK.D, CT._C), new(bn256.GT).Neg(temp))
+	recovered := new(bn256.GT).Add(bn256.Pair(SK.D, CT.CC), new(bn256.GT).Neg(temp))
 	return recovered
 }
 
 func Decrypt(IR *bn256.GT, SKu *big.Int, CT *Ciphertext) *bn256.GT {
-	temp := new(bn256.GT).ScalarMult(IR, SKu.ModInverse(SKu, FieldOrder))
+	invSKu := new(big.Int).ModInverse(SKu, FieldOrder) // 先创建新变量存储逆元
+	temp := new(bn256.GT).ScalarMult(IR, invSKu)
 	m := new(bn256.GT).Add(CT.C, new(bn256.GT).Neg(temp))
+	return m
+}
+
+func BSWDecrypt(attributeSet map[string]bool, CT *Ciphertext, SK *AttributeKey, xsMap xsMapType, PK *Params) *bn256.GT {
+
+	attributePolicy := CountAttributes(CT.Policy)
+	// 构造 attrX 映射
+	attrX := make(map[string]*big.Int)
+	for attr, s := range CT.NodeValue {
+		if attributeSet[attr] {
+			for x, _ := range s {
+				attrX[attr] = x
+			}
+		}
+	}
+	// 计算拉格朗日系数
+	coeffs := GetCoefficientsNoPrune(CT.Policy, attributeSet, attrX, xsMap, FieldOrder)
+	// 根据属性份额和系数恢复秘密
+	var usedShares []DecShare
+	for attr, keyValue := range SK.KeyValue {
+		var usedshare DecShare
+		if Contains(attributePolicy, attr) != "" {
+			usedshare.Attribute = attr
+			for x, cyValue := range CT.NodeValue[attr] {
+				usedshare.X = x
+				for _cy, cy := range cyValue {
+					for dx, _dx := range keyValue {
+						left := bn256.Pair(dx, cy)
+						right := bn256.Pair(_cy, _dx)
+						usedshare.Share = new(bn256.GT).Add(left, new(bn256.GT).Neg(right))
+						usedShares = append(usedShares, usedshare)
+					}
+				}
+			}
+		}
+	}
+	temp := RecoverSecret(usedShares, coeffs, FieldOrder)
+	recovered := new(bn256.GT).Add(bn256.Pair(SK.D, CT.CC), new(bn256.GT).Neg(temp))
+	m := new(bn256.GT).Add(CT.C, new(bn256.GT).Neg(recovered))
 	return m
 }
