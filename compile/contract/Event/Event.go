@@ -25,6 +25,7 @@ type SellerGetPaymentEvent struct {
 }
 
 // 监听 BroadcastPubKey 事件中和指定 seller 地址相关的记录
+// 监听 BroadcastPubKey 事件中和指定 seller 地址相关的记录
 func PollEventsBySeller(
 	client *ethclient.Client,
 	contractAddress common.Address,
@@ -33,11 +34,10 @@ func PollEventsBySeller(
 	startBlock uint64,
 ) ([]OrderEventInfo, error) {
 	query := ethereum.FilterQuery{
-		FromBlock: big.NewInt(int64(startBlock)),
+		FromBlock: new(big.Int).SetUint64(startBlock),
 		Addresses: []common.Address{contractAddress},
 		Topics: [][]common.Hash{
 			{contractABI.Events["BroadcastPubKey"].ID}, // topic0: 事件签名
-			{common.Hash(seller.Hash())},               // topic1: _seller
 		},
 	}
 
@@ -49,13 +49,21 @@ func PollEventsBySeller(
 	var results []OrderEventInfo
 
 	for _, vLog := range logs {
-		// 提取 indexed 参数 buyer（topic[2]）
+		// 检查是否有足够的 Topics（至少 3 个）
 		if len(vLog.Topics) < 3 {
-			continue // 不合法日志
+			log.Printf("Invalid log: insufficient Topics")
+			continue // 跳过无效日志
 		}
+
+		// 提取 indexed 参数 buyer（topic[2]）
 		buyer := common.HexToAddress(vLog.Topics[2].Hex())
 
-		// 非indexed数据的结构体解码（注意顺序和类型必须一致）
+		// 仅处理与指定 seller 地址相关的日志
+		if buyer != seller {
+			continue // 跳过与目标卖家无关的事件
+		}
+
+		// 解码非indexed数据部分
 		var eventData struct {
 			ProductID    string
 			Quantity     *big.Int
@@ -71,6 +79,7 @@ func PollEventsBySeller(
 			continue
 		}
 
+		// 将事件数据添加到结果集中
 		results = append(results, OrderEventInfo{
 			OrderID: eventData.OrderID,
 			Buyer:   buyer,

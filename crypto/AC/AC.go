@@ -3,7 +3,6 @@ package AC
 import (
 	bn256 "Obfushop/bn256"
 	"crypto/rand"
-	"fmt"
 	"log"
 	"math/big"
 )
@@ -109,11 +108,11 @@ func PrepareBlindSign(params *Params, m *big.Int) (*big.Int, *Req) {
 
 func BlindSign(params *Params, issuerkey *IssuerKey, req *Req) *BlindSignature {
 
-	Result, err := VerifyPiS(params, req.gamma, req.C, req.Cm, req.PiS)
+	_, err := VerifyPiS(params, req.gamma, req.C, req.Cm, req.PiS)
 	if err != nil {
 		log.Fatal("proof verification failed:", err)
 	}
-	fmt.Println("π_s valid:", Result)
+	//fmt.Println("π_s valid:", Result)
 
 	// 1. 计算 h = HashG2(cm)
 	hBytes := req.Cm.Marshal()

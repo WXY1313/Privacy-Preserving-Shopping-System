@@ -84,24 +84,13 @@ contract BC_SID {
 
   
 
-    function DLEQVerify(G1Point memory g1, G1Point memory y1, G1Point memory a1, 
-                       G1Point memory g2, G1Point memory y2, G1Point memory a2, 
-                       G1Point memory g3, G1Point memory y3, G1Point memory a3, 
+    function DLVerify(G1Point memory g1, G1Point memory y1, G1Point memory a1, 
                        uint256 c, uint256 z) public payable returns (bool)
     {
         G1Point memory g1G = g1mul(g1, z);
         G1Point memory y1G = g1mul(y1, c);
-
-        G1Point memory g2G = g1mul(g2, z);
-        G1Point memory y2G = g1mul(y2, c);
-
-        G1Point memory g3G = g1mul(g3, z);
-        G1Point memory y3G = g1mul(y3, c);
-
         G1Point memory pt1 =  g1add(g1G, y1G);
-        G1Point memory pt2 =  g1add(g2G, y2G);
-        G1Point memory pt3 =  g1add(g3G, y3G);
-        if ((a1.X != pt1.X) || (a1.Y != pt1.Y) || (a2.X != pt2.X) || (a2.Y != pt2.Y)|| (a3.X != pt3.X) || (a3.Y != pt3.Y))
+        if ((a1.X != pt1.X) || (a1.Y != pt1.Y))
         {
             return false;
         }
@@ -173,6 +162,7 @@ contract BC_SID {
     }
 
     mapping(bytes32 => string) public SID;
+    mapping(bytes32 => string[])public SIDSet;
     G1Point G1;
     G2Point G2;
     G1Point[2] IssuerKey;
@@ -185,13 +175,13 @@ contract BC_SID {
         IssuerKey[1]=_pky;
     }
 
-    function RegisterSID(G1Point memory _pk1, G2Point memory _pk2,G2Point memory _u, G2Point memory _s, uint256 _m,string memory _attr) public returns (bool) 
+    function RegisterSID(G1Point memory _pk1,G1Point memory _a1, uint256 _c, uint256 _z, G2Point memory _u, G2Point memory _s, uint256 _m,string memory _attr) public returns (bool) 
     {
         if(isG2Zero(_u)||_m!=stringToUint256(_attr))
         {
             return false;
         }
-        if(!pairingProd2(g1neg(G1), _pk2, _pk1, G2)){
+        if(!DLVerify(G1, _pk1 , _a1, _c, _z)){
             return false;
         }
         if(pairingProd2(g1add(IssuerKey[0], g1mul(IssuerKey[1], _m)), _u, g1neg(_pk1), _s)){
@@ -200,13 +190,47 @@ contract BC_SID {
         return true;
     }
 
+
     function getSID(G1Point memory pk) public view returns (string memory) {
         return SID[GetPointKey(pk)];
+    }
+    
+    function RegisterSIDSet(G1Point memory _pk1,G1Point memory _a1, uint256 _c, uint256 _z,G2Point[] memory _u, G2Point[] memory _s,string[] memory _attr) public returns (bool) 
+    {
+        string[] memory sidSet = new string[](_attr.length);
+        uint256[] memory m = new uint256[](_attr.length);
+        if(!DLVerify(G1, _pk1 , _a1, _c, _z)){
+            return false;
+        }
+
+        for (uint i=0;i<_u.length;i++){
+            if(isG2Zero(_u[i]))
+            {
+                return false;
+            }
+            m[i]=stringToUint256(_attr[i]);
+            if(pairingProd2(g1add(IssuerKey[0], g1mul(IssuerKey[1], m[i])), _u[i], g1neg(_pk1), _s[i])){
+                sidSet[i]=_attr[i];
+            }
+        }
+        SIDSet[GetPointKey(_pk1)]=sidSet;
+        return true;
+    }
+
+
+    function getSIDSet(G1Point memory pk) public view returns (string[] memory) {
+        return SIDSet[GetPointKey(pk)];
     }
 
     function CheckClaim(G1Point memory pk, string memory attribute) public view returns (bool) {
         bytes32 key = GetPointKey(pk);
-        return keccak256(abi.encodePacked(SID[key])) == keccak256(abi.encodePacked(attribute));
+        for (uint i=0;i<SIDSet[key].length;i++){
+            if (keccak256(abi.encodePacked(SIDSet[key][i])) == keccak256(abi.encodePacked(attribute))){
+                return true;
+            }
+        }
+        return false;
+        //return keccak256(abi.encodePacked(SID[key])) == keccak256(abi.encodePacked(attribute));
     }
 
 
